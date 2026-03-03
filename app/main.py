@@ -148,6 +148,13 @@ def market(user: dict = Depends(get_authenticated_user)) -> dict:
     return {"history": service.storage.get_market_history()}
 
 
+@app.post("/api/market/poll-now")
+async def market_poll_now(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    result = await service.refresh_market_now()
+    return {"ok": True, **result}
+
+
 @app.get("/api/timeseries")
 def timeseries(
     points: int = Query(default=settings.dashboard_history_points, ge=12, le=300),
@@ -174,8 +181,47 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
     opportunities_payload: list[dict] = []
     for item_id in settings.tracked_item_ids:
         series = service.storage.get_market_prices_for_item(item_id=item_id, limit=220)
+        if not series:
+            opportunities_payload.append(
+                {
+                    "item_id": item_id,
+                    "item_name": f"Item {item_id}",
+                    "action": "NO_DATA",
+                    "confidence": 0.0,
+                    "current_price": 0,
+                    "moving_average": 0.0,
+                    "drop_percent": 0.0,
+                    "threshold_percent": 0.0,
+                    "expected_return": 0,
+                    "expected_return_percent": 0.0,
+                    "samples": 0,
+                    "updated_at": None,
+                }
+            )
+            continue
+
         prices = [int(row["lowest_price"]) for row in series if int(row.get("lowest_price", 0)) > 0]
+        item_name = str(series[-1].get("item_name") or f"Item {item_id}")
+
         if len(prices) < service.strategy.window:
+            current_price = prices[-1] if prices else int(series[-1].get("lowest_price", 0) or 0)
+            opportunities_payload.append(
+                {
+                    "item_id": item_id,
+                    "item_name": item_name,
+                    "action": "WAIT_DATA",
+                    "confidence": 35.0,
+                    "current_price": current_price,
+                    "moving_average": round(float(mean(prices)) if prices else 0.0, 2),
+                    "drop_percent": 0.0,
+                    "threshold_percent": round(float(settings.strategy_min_drop_percent), 2),
+                    "expected_return": 0,
+                    "expected_return_percent": 0.0,
+                    "samples": len(prices),
+                    "min_samples_required": service.strategy.window,
+                    "updated_at": series[-1].get("timestamp"),
+                }
+            )
             continue
 
         signal = service.strategy.signal_for_series(prices)
@@ -196,7 +242,6 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
             action = "SKIP"
             confidence = min(confidence, 59)
 
-        item_name = str(series[-1].get("item_name") or f"Item {item_id}")
         opportunities_payload.append(
             {
                 "item_id": item_id,
@@ -217,6 +262,7 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
     opportunities_payload.sort(
         key=lambda row: (
             row["action"] != "BUY",
+            row["action"] == "NO_DATA",
             -float(row["confidence"]),
             -float(row["expected_return"]),
         )
@@ -228,6 +274,8 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
             "buy": sum(1 for row in opportunities_payload if row["action"] == "BUY"),
             "watch": sum(1 for row in opportunities_payload if row["action"] == "WATCH"),
             "skip": sum(1 for row in opportunities_payload if row["action"] == "SKIP"),
+            "wait_data": sum(1 for row in opportunities_payload if row["action"] == "WAIT_DATA"),
+            "no_data": sum(1 for row in opportunities_payload if row["action"] == "NO_DATA"),
         },
     }
 

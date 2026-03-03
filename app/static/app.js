@@ -4,6 +4,7 @@ const api = {
   health: "/api/health",
   overview: "/api/overview",
   market: "/api/market",
+  marketPollNow: "/api/market/poll-now",
   timeseries: "/api/timeseries",
   insights: "/api/insights",
   opportunities: "/api/opportunities",
@@ -390,18 +391,52 @@ async function loadInsights() {
 
 async function loadOpportunities() {
   const data = await apiFetch(api.opportunities);
-  const summary = data.summary || { buy: 0, watch: 0, skip: 0 };
-  $("opportunities-summary").textContent = `BUY: ${summary.buy} • WATCH: ${summary.watch} • SKIP: ${summary.skip}`;
+  const summary = data.summary || { buy: 0, watch: 0, skip: 0, wait_data: 0, no_data: 0 };
+  $("opportunities-summary").textContent =
+    `BUY: ${summary.buy} • WATCH: ${summary.watch} • SKIP: ${summary.skip} • ` +
+    `WAIT: ${summary.wait_data} • NONE: ${summary.no_data}`;
 
   const items = data.items || [];
   setList(
     "opportunities-list",
     items,
-    (item) =>
-      `[${item.action}] ${item.item_name} (#${item.item_id}) • conf ${item.confidence}% • ` +
-      `Δ ${item.drop_percent}%/${item.threshold_percent}% • ` +
-      `potentiel ${formatMoney(item.expected_return)} (${item.expected_return_percent}%)`
+    (item) => {
+      if (item.action === "NO_DATA") {
+        return `[NO_DATA] ${item.item_name} (#${item.item_id}) • aucune donnée marché collectée`;
+      }
+      if (item.action === "WAIT_DATA") {
+        return `[WAIT_DATA] ${item.item_name} (#${item.item_id}) • ${item.samples} échantillons (min ${item.min_samples_required || 12})`;
+      }
+      return (
+        `[${item.action}] ${item.item_name} (#${item.item_id}) • conf ${item.confidence}% • ` +
+        `Δ ${item.drop_percent}%/${item.threshold_percent}% • ` +
+        `potentiel ${formatMoney(item.expected_return)} (${item.expected_return_percent}%)`
+      );
+    }
   );
+}
+
+async function pollMarketNow() {
+  const btn = $("poll-market-now-btn");
+  const previous = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Polling...";
+
+  try {
+    const result = await apiFetch(api.marketPollNow, { method: "POST" });
+    await Promise.all([loadMarketTable(), loadInsights(), loadOpportunities(), loadAdvancedMarketChart()]);
+    btn.textContent = `Terminé (${result.inserted}/${result.tracked})`;
+    setTimeout(() => {
+      btn.textContent = previous;
+      btn.disabled = false;
+    }, 2000);
+  } catch (error) {
+    btn.textContent = "Erreur";
+    setTimeout(() => {
+      btn.textContent = previous;
+      btn.disabled = false;
+    }, 2000);
+  }
 }
 
 async function loadWarRoom() {
@@ -470,6 +505,7 @@ function wireEvents() {
   $("logout-btn").addEventListener("click", logout);
   $("market-item-select").addEventListener("change", loadAdvancedMarketChart);
   $("run-backtest-btn").addEventListener("click", runBacktest);
+  $("poll-market-now-btn").addEventListener("click", pollMarketNow);
 }
 
 async function bootstrap() {

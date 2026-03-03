@@ -28,6 +28,7 @@ class TornNexusService:
         self._running = False
         self._energy_full_notified = False
         self._last_alert_sent_at: dict[str, float] = {}
+        self._market_refresh_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._running:
@@ -101,12 +102,7 @@ class TornNexusService:
     async def _poll_market_loop(self) -> None:
         while self._running:
             try:
-                for item_id in settings.tracked_item_ids:
-                    price_payload = await self.client.fetch_market_price(item_id)
-                    if not price_payload:
-                        continue
-                    self.storage.add_market_price(price_payload)
-                    await self._check_price_alert(price_payload)
+                await self.refresh_market_now()
 
             except Exception as exc:
                 logger.exception("Market polling failed: %s", exc)
@@ -119,6 +115,21 @@ class TornNexusService:
                 )
 
             await asyncio.sleep(settings.market_poll_interval_seconds)
+
+    async def refresh_market_now(self) -> dict[str, int]:
+        async with self._market_refresh_lock:
+            fetched = 0
+            inserted = 0
+            for item_id in settings.tracked_item_ids:
+                price_payload = await self.client.fetch_market_price(item_id)
+                if not price_payload:
+                    continue
+                fetched += 1
+                self.storage.add_market_price(price_payload)
+                inserted += 1
+                await self._check_price_alert(price_payload)
+
+            return {"fetched": fetched, "inserted": inserted, "tracked": len(settings.tracked_item_ids)}
 
     async def _poll_faction_loop(self) -> None:
         while self._running:
