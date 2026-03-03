@@ -6,6 +6,7 @@ const api = {
   market: "/api/market",
   timeseries: "/api/timeseries",
   insights: "/api/insights",
+  opportunities: "/api/opportunities",
   marketSeries: "/api/market/series",
   backtest: "/api/strategy/backtest",
   warRoom: "/api/faction/war-room",
@@ -387,6 +388,22 @@ async function loadInsights() {
   renderInsights(data.market || []);
 }
 
+async function loadOpportunities() {
+  const data = await apiFetch(api.opportunities);
+  const summary = data.summary || { buy: 0, watch: 0, skip: 0 };
+  $("opportunities-summary").textContent = `BUY: ${summary.buy} • WATCH: ${summary.watch} • SKIP: ${summary.skip}`;
+
+  const items = data.items || [];
+  setList(
+    "opportunities-list",
+    items,
+    (item) =>
+      `[${item.action}] ${item.item_name} (#${item.item_id}) • conf ${item.confidence}% • ` +
+      `Δ ${item.drop_percent}%/${item.threshold_percent}% • ` +
+      `potentiel ${formatMoney(item.expected_return)} (${item.expected_return_percent}%)`
+  );
+}
+
 async function loadWarRoom() {
   const data = await apiFetch(api.warRoom);
   renderWarRoom(data.snapshot);
@@ -434,6 +451,7 @@ async function refresh() {
       loadMarketTable(),
       loadTimeseries(health.history_points || 48),
       loadInsights(),
+      loadOpportunities(),
       loadWarRoom(),
       loadAdvancedMarketChart(),
     ]);

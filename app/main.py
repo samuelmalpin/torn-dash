@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
+from statistics import mean
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status # pyright: ignore[reportMissingImports]
 from fastapi.responses import FileResponse, RedirectResponse # pyright: ignore[reportMissingImports]
@@ -163,6 +164,71 @@ def insights(user: dict = Depends(get_authenticated_user)) -> dict:
     _ = user
     return {
         "market": service.storage.get_market_insights(settings.tracked_item_ids),
+    }
+
+
+@app.get("/api/opportunities")
+def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+
+    opportunities_payload: list[dict] = []
+    for item_id in settings.tracked_item_ids:
+        series = service.storage.get_market_prices_for_item(item_id=item_id, limit=220)
+        prices = [int(row["lowest_price"]) for row in series if int(row.get("lowest_price", 0)) > 0]
+        if len(prices) < service.strategy.window:
+            continue
+
+        signal = service.strategy.signal_for_series(prices)
+        current_price = int(signal.get("current_price", prices[-1]))
+        moving_average = float(signal.get("moving_average", mean(prices[-service.strategy.window :])))
+        threshold = float(signal.get("dynamic_threshold", settings.strategy_min_drop_percent))
+        drop_percent = float(signal.get("drop_percent", 0.0))
+        expected_return = max(0.0, moving_average - current_price)
+        expected_return_pct = (expected_return / current_price * 100) if current_price > 0 else 0.0
+
+        confidence = 50 + min(40, max(0.0, drop_percent - threshold) * 4)
+        if signal.get("has_signal"):
+            action = "BUY"
+        elif drop_percent >= (threshold * 0.65):
+            action = "WATCH"
+            confidence = min(confidence, 74)
+        else:
+            action = "SKIP"
+            confidence = min(confidence, 59)
+
+        item_name = str(series[-1].get("item_name") or f"Item {item_id}")
+        opportunities_payload.append(
+            {
+                "item_id": item_id,
+                "item_name": item_name,
+                "action": action,
+                "confidence": round(confidence, 1),
+                "current_price": current_price,
+                "moving_average": round(moving_average, 2),
+                "drop_percent": round(drop_percent, 2),
+                "threshold_percent": round(threshold, 2),
+                "expected_return": int(expected_return),
+                "expected_return_percent": round(expected_return_pct, 2),
+                "samples": len(prices),
+                "updated_at": series[-1].get("timestamp"),
+            }
+        )
+
+    opportunities_payload.sort(
+        key=lambda row: (
+            row["action"] != "BUY",
+            -float(row["confidence"]),
+            -float(row["expected_return"]),
+        )
+    )
+
+    return {
+        "items": opportunities_payload[:8],
+        "summary": {
+            "buy": sum(1 for row in opportunities_payload if row["action"] == "BUY"),
+            "watch": sum(1 for row in opportunities_payload if row["action"] == "WATCH"),
+            "skip": sum(1 for row in opportunities_payload if row["action"] == "SKIP"),
+        },
     }
 
 
