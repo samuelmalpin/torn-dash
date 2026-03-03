@@ -29,7 +29,7 @@ class TornClient:
             await self._session.close()
             self._session = None
 
-    async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _get(self, path: str, params: dict[str, Any]) -> Any:
         if self._session is None:
             raise RuntimeError("TornClient not started")
 
@@ -39,7 +39,7 @@ class TornClient:
         async with self._session.get(url, params=enriched_params) as response:
             response.raise_for_status()
             payload = await response.json()
-            if "error" in payload:
+            if isinstance(payload, dict) and "error" in payload:
                 error_payload = payload.get("error")
                 if isinstance(error_payload, dict):
                     error_code = error_payload.get("code")
@@ -54,7 +54,7 @@ class TornClient:
                 raise TornApiError(parsed_code, error_message, error_payload)
             return payload
 
-    async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> Any:
         try:
             return await self._get(path, params)
         except TornApiError as exc:
@@ -114,25 +114,41 @@ class TornClient:
 
         candidates: list[int] = []
 
-        for key in ("bazaar", "itemmarket"):
-            section = payload.get(key, {})
-            if isinstance(section, dict):
-                for _, listing in section.items():
-                    price = listing.get("cost") or listing.get("price")
-                    if isinstance(price, (int, float)) and price > 0:
-                        candidates.append(int(price))
-            elif isinstance(section, list):
-                for listing in section:
-                    if not isinstance(listing, dict):
-                        continue
-                    price = listing.get("cost") or listing.get("price")
-                    if isinstance(price, (int, float)) and price > 0:
-                        candidates.append(int(price))
+        if isinstance(payload, dict):
+            for key in ("bazaar", "itemmarket"):
+                section = payload.get(key, {})
+                if isinstance(section, dict):
+                    for _, listing in section.items():
+                        if not isinstance(listing, dict):
+                            continue
+                        price = listing.get("cost") or listing.get("price")
+                        if isinstance(price, (int, float)) and price > 0:
+                            candidates.append(int(price))
+                elif isinstance(section, list):
+                    for listing in section:
+                        if not isinstance(listing, dict):
+                            continue
+                        price = listing.get("cost") or listing.get("price")
+                        if isinstance(price, (int, float)) and price > 0:
+                            candidates.append(int(price))
+        elif isinstance(payload, list):
+            for listing in payload:
+                if not isinstance(listing, dict):
+                    continue
+                price = listing.get("cost") or listing.get("price")
+                if isinstance(price, (int, float)) and price > 0:
+                    candidates.append(int(price))
 
         if not candidates:
             return None
 
-        item_name = payload.get("name") or payload.get("item", {}).get("name") or f"Item {item_id}"
+        item_name = f"Item {item_id}"
+        if isinstance(payload, dict):
+            item_name = payload.get("name") or payload.get("item", {}).get("name") or item_name
+        elif isinstance(payload, list) and payload:
+            first = payload[0]
+            if isinstance(first, dict):
+                item_name = str(first.get("name") or first.get("item_name") or item_name)
 
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
