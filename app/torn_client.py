@@ -78,15 +78,29 @@ class TornClient:
         raise TornApiError(None, "no supported selections")
 
     async def fetch_user_data(self) -> dict[str, Any]:
-        payload = await self._get_first_supported(
+        base_payload = await self._get_first_supported(
             "user",
             [
-                "profile,bars,money,points,events",
-                "profile,bars,currency,events",
                 "profile,bars,events",
                 "basic,bars,events",
             ],
         )
+
+        payload: dict[str, Any] = dict(base_payload)
+
+        money_payload = await self._get_optional_first_supported(
+            "user",
+            [
+                "money",
+                "currency",
+            ],
+        )
+        if money_payload:
+            payload.update(money_payload)
+
+        points_payload = await self._get_optional_first_supported("user", ["points"])
+        if points_payload:
+            payload.update(points_payload)
 
         bars = payload.get("bars", {})
         money_data = payload.get("money", {})
@@ -138,6 +152,18 @@ class TornClient:
             except (TypeError, ValueError):
                 continue
         return 0
+
+    async def _get_optional_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any] | None:
+        for selection in selections_candidates:
+            try:
+                payload = await self._get_with_v2_fallback(path, {"selections": selection})
+                if isinstance(payload, dict):
+                    return payload
+            except TornApiError as exc:
+                if exc.code in {4, 16, 22, 23}:
+                    continue
+                raise
+        return None
 
     async def fetch_market_price(self, item_id: int) -> dict[str, Any] | None:
         payload = await self._get_with_v2_fallback(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
