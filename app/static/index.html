@@ -69,6 +69,18 @@
         <ul id="opportunities-list"></ul>
       </section>
 
+      <section class="card widget" data-widget="trading-plan">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Plan auto (budget)</h2>
+        <div class="market-controls">
+          <label for="trading-budget-input">Budget:</label>
+          <input id="trading-budget-input" type="number" min="10000" step="10000" />
+          <button id="generate-plan-btn" class="ghost-btn">Générer plan</button>
+        </div>
+        <div id="trading-plan-summary" class="insight-price">Aucun plan généré.</div>
+        <ul id="trading-plan-list"></ul>
+      </section>
+
       <section class="card widget" data-widget="market-signals">
         <button class="drag-handle" title="Déplacer">⋮⋮</button>
         <h2>Signaux marché</h2>

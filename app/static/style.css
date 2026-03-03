@@ -208,6 +208,15 @@ svg {
   padding: 0.35rem 0.5rem;
 }
 
+.market-controls input {
+  border: 1px solid var(--line);
+  background: rgba(9, 18, 37, 0.8);
+  color: var(--txt);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  min-width: 150px;
+}
+
 .backtest-box,
 .war-room-box {
   border: 1px solid rgba(122, 170, 255, 0.28);

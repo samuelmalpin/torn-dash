@@ -8,6 +8,7 @@ const api = {
   timeseries: "/api/timeseries",
   insights: "/api/insights",
   opportunities: "/api/opportunities",
+  tradingPlan: "/api/trading/plan",
   marketSeries: "/api/market/series",
   backtest: "/api/strategy/backtest",
   warRoom: "/api/faction/war-room",
@@ -337,6 +338,9 @@ async function loadHealth() {
   if (trackedItems.length) {
     fillMarketSelector(trackedItems);
   }
+  if ($("trading-budget-input") && !$("trading-budget-input").value) {
+    $("trading-budget-input").value = String(health.trading_budget_default || 5000000);
+  }
   return health;
 }
 
@@ -439,6 +443,25 @@ async function pollMarketNow() {
   }
 }
 
+async function loadTradingPlan() {
+  const input = $("trading-budget-input");
+  const budget = Math.max(10000, Number(input.value || 0));
+  input.value = String(budget);
+
+  const data = await apiFetch(`${api.tradingPlan}?budget=${budget}`);
+  $("trading-plan-summary").textContent =
+    `Mode: simulation • Budget ${formatMoney(data.budget)} • ` +
+    `Engagé ${formatMoney(data.spent)} • Reste ${formatMoney(data.remaining)}`;
+
+  setList(
+    "trading-plan-list",
+    data.items || [],
+    (item) =>
+      `[${item.action}] ${item.item_name} (#${item.item_id}) • qty ${item.quantity} x ${formatMoney(item.unit_price)} • ` +
+      `engagé ${formatMoney(item.allocated)} • potentiel ${formatMoney(item.expected_return_total)}`
+  );
+}
+
 async function loadWarRoom() {
   const data = await apiFetch(api.warRoom);
   renderWarRoom(data.snapshot);
@@ -506,6 +529,7 @@ function wireEvents() {
   $("market-item-select").addEventListener("change", loadAdvancedMarketChart);
   $("run-backtest-btn").addEventListener("click", runBacktest);
   $("poll-market-now-btn").addEventListener("click", pollMarketNow);
+  $("generate-plan-btn").addEventListener("click", loadTradingPlan);
 }
 
 async function bootstrap() {
@@ -514,6 +538,7 @@ async function bootstrap() {
   wireEvents();
   await loadAuthContext();
   await refresh();
+  await loadTradingPlan();
   setInterval(refresh, 30000);
 }
 

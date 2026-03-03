@@ -85,6 +85,8 @@ class Settings:
 
     backtest_horizon_steps: int = int(os.getenv("BACKTEST_HORIZON_STEPS", "4"))
     backtest_profit_target_percent: float = float(os.getenv("BACKTEST_PROFIT_TARGET_PERCENT", "5.0"))
+    trading_budget_default: int = int(os.getenv("TRADING_BUDGET_DEFAULT", "5000000"))
+    trading_max_positions: int = int(os.getenv("TRADING_MAX_POSITIONS", "4"))
 
     faction_id: int = int(os.getenv("FACTION_ID", "0"))
     faction_poll_interval_seconds: int = int(os.getenv("FACTION_POLL_INTERVAL_SECONDS", "90"))

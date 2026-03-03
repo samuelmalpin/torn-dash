@@ -64,120 +64,7 @@ def get_authenticated_user(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-@app.get("/login")
-def login_page() -> FileResponse:
-    return FileResponse(static_dir / "login.html")
-
-
-@app.get("/")
-def root_page(request: Request) -> RedirectResponse:
-    token = request.cookies.get("torn_session", "")
-    payload = decode_session_token(token)
-    if payload:
-        return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
-    return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
-
-
-@app.get("/dashboard", response_model=None)
-def dashboard(request: Request) -> FileResponse | RedirectResponse:
-    token = request.cookies.get("torn_session", "")
-    payload = decode_session_token(token)
-    if not payload:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
-    return FileResponse(static_dir / "index.html")
-
-
-@app.post("/api/auth/login")
-def login(payload: LoginPayload, request: Request, response: Response) -> dict:
-    if not is_auth_secret_secure():
-        logger.error("Refusing login: AUTH_SECRET is insecure. Set a random secret with at least 32 characters.")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Authentication is temporarily unavailable: server secret misconfiguration.",
-        )
-
-    profile = authenticate_user(payload.username.strip(), payload.password)
-    if not profile:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-    token = create_session_token(profile["username"], profile["role"])
-    response.set_cookie(
-        key="torn_session",
-        value=token,
-        httponly=True,
-        secure=request.url.scheme == "https",
-        samesite="lax",
-        path="/",
-        max_age=settings.auth_session_hours * 3600,
-    )
-    return {"ok": True, "username": profile["username"], "role": profile["role"]}
-
-
-@app.post("/api/auth/logout")
-def logout(response: Response) -> dict:
-    response.delete_cookie("torn_session", path="/")
-    return {"ok": True}
-
-
-@app.get("/api/auth/me")
-def me(user: dict = Depends(get_authenticated_user)) -> dict:
-    return {"username": user.get("username"), "role": user.get("role")}
-
-
-@app.get("/api/health")
-def health(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-    return {
-        "status": "ok",
-        "torn_configured": bool(settings.torn_api_key),
-        "tracked_items": settings.tracked_item_ids,
-        "history_points": settings.dashboard_history_points,
-        "faction_id": settings.faction_id,
-    }
-
-
-@app.get("/api/overview")
-def overview(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-    return service.storage.get_latest_overview()
-
-
-@app.get("/api/market")
-def market(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-    return {"history": service.storage.get_market_history()}
-
-
-@app.post("/api/market/poll-now")
-async def market_poll_now(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-    result = await service.refresh_market_now()
-    return {"ok": True, **result}
-
-
-@app.get("/api/timeseries")
-def timeseries(
-    points: int = Query(default=settings.dashboard_history_points, ge=12, le=300),
-    user: dict = Depends(get_authenticated_user),
-) -> dict:
-    _ = user
-    return {
-        "points": service.storage.get_user_timeseries(limit=points),
-    }
-
-
-@app.get("/api/insights")
-def insights(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-    return {
-        "market": service.storage.get_market_insights(settings.tracked_item_ids),
-    }
-
-
-@app.get("/api/opportunities")
-def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
-    _ = user
-
+def _compute_opportunities_payload() -> list[dict]:
     opportunities_payload: list[dict] = []
     for item_id in settings.tracked_item_ids:
         series = service.storage.get_market_prices_for_item(item_id=item_id, limit=220)
@@ -267,6 +154,125 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
             -float(row["expected_return"]),
         )
     )
+    return opportunities_payload
+
+
+@app.get("/login")
+def login_page() -> FileResponse:
+    return FileResponse(static_dir / "login.html")
+
+
+@app.get("/")
+def root_page(request: Request) -> RedirectResponse:
+    token = request.cookies.get("torn_session", "")
+    payload = decode_session_token(token)
+    if payload:
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+
+@app.get("/dashboard", response_model=None)
+def dashboard(request: Request) -> FileResponse | RedirectResponse:
+    token = request.cookies.get("torn_session", "")
+    payload = decode_session_token(token)
+    if not payload:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    return FileResponse(static_dir / "index.html")
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginPayload, request: Request, response: Response) -> dict:
+    if not is_auth_secret_secure():
+        logger.error("Refusing login: AUTH_SECRET is insecure. Set a random secret with at least 32 characters.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is temporarily unavailable: server secret misconfiguration.",
+        )
+
+    profile = authenticate_user(payload.username.strip(), payload.password)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    token = create_session_token(profile["username"], profile["role"])
+    response.set_cookie(
+        key="torn_session",
+        value=token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+        max_age=settings.auth_session_hours * 3600,
+    )
+    return {"ok": True, "username": profile["username"], "role": profile["role"]}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie("torn_session", path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(get_authenticated_user)) -> dict:
+    return {"username": user.get("username"), "role": user.get("role")}
+
+
+@app.get("/api/health")
+def health(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    return {
+        "status": "ok",
+        "torn_configured": bool(settings.torn_api_key),
+        "tracked_items": settings.tracked_item_ids,
+        "history_points": settings.dashboard_history_points,
+        "faction_id": settings.faction_id,
+        "trading_budget_default": settings.trading_budget_default,
+        "trading_max_positions": settings.trading_max_positions,
+    }
+
+
+@app.get("/api/overview")
+def overview(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    return service.storage.get_latest_overview()
+
+
+@app.get("/api/market")
+def market(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    return {"history": service.storage.get_market_history()}
+
+
+@app.post("/api/market/poll-now")
+async def market_poll_now(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    result = await service.refresh_market_now()
+    return {"ok": True, **result}
+
+
+@app.get("/api/timeseries")
+def timeseries(
+    points: int = Query(default=settings.dashboard_history_points, ge=12, le=300),
+    user: dict = Depends(get_authenticated_user),
+) -> dict:
+    _ = user
+    return {
+        "points": service.storage.get_user_timeseries(limit=points),
+    }
+
+
+@app.get("/api/insights")
+def insights(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    return {
+        "market": service.storage.get_market_insights(settings.tracked_item_ids),
+    }
+
+
+@app.get("/api/opportunities")
+def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
+    _ = user
+    opportunities_payload = _compute_opportunities_payload()
 
     return {
         "items": opportunities_payload[:8],
@@ -277,6 +283,81 @@ def opportunities(user: dict = Depends(get_authenticated_user)) -> dict:
             "wait_data": sum(1 for row in opportunities_payload if row["action"] == "WAIT_DATA"),
             "no_data": sum(1 for row in opportunities_payload if row["action"] == "NO_DATA"),
         },
+    }
+
+
+@app.get("/api/trading/plan")
+def trading_plan(
+    budget: int = Query(default=settings.trading_budget_default, ge=10000, le=2_000_000_000),
+    max_positions: int = Query(default=settings.trading_max_positions, ge=1, le=20),
+    user: dict = Depends(get_authenticated_user),
+) -> dict:
+    _ = user
+    opportunities_payload = _compute_opportunities_payload()
+
+    candidates = [
+        row
+        for row in opportunities_payload
+        if row.get("action") in {"BUY", "WATCH"} and int(row.get("current_price", 0)) > 0
+    ]
+    candidates.sort(
+        key=lambda row: (
+            row.get("action") != "BUY",
+            -(float(row.get("confidence", 0.0)) + float(row.get("expected_return_percent", 0.0))),
+        )
+    )
+
+    remaining = int(budget)
+    slots = max(1, int(max_positions))
+    plan_items: list[dict] = []
+
+    for candidate in candidates:
+        if remaining <= 0 or len(plan_items) >= slots:
+            break
+
+        price = int(candidate.get("current_price", 0))
+        if price <= 0:
+            continue
+
+        open_slots = max(1, slots - len(plan_items))
+        slot_budget = max(price, remaining // open_slots)
+        quantity = slot_budget // price
+        if quantity <= 0:
+            continue
+
+        spend = quantity * price
+        if spend > remaining:
+            quantity = remaining // price
+            spend = quantity * price
+        if quantity <= 0:
+            continue
+
+        remaining -= spend
+        plan_items.append(
+            {
+                "item_id": candidate["item_id"],
+                "item_name": candidate["item_name"],
+                "action": candidate["action"],
+                "confidence": candidate["confidence"],
+                "unit_price": price,
+                "quantity": quantity,
+                "allocated": spend,
+                "expected_return_unit": int(candidate.get("expected_return", 0)),
+                "expected_return_total": int(candidate.get("expected_return", 0)) * quantity,
+                "expected_return_percent": candidate.get("expected_return_percent", 0.0),
+            }
+        )
+
+    spent = int(budget) - remaining
+    return {
+        "mode": "simulation_only",
+        "executable": False,
+        "budget": int(budget),
+        "spent": spent,
+        "remaining": remaining,
+        "positions": len(plan_items),
+        "items": plan_items,
+        "note": "Torn API is read-only for this app: this is a trading plan assistant, not automatic order execution.",
     }
 
 

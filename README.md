@@ -10,6 +10,7 @@ Bot Torn + dashboard web futuriste, prêt pour un déploiement personnel sur Doc
 - Moteur d'alertes multi-canaux (Discord, Telegram, email)
 - Anti-spam d'alertes via cooldown configurable
 - Stratégie de BUY signal à seuil dynamique (volatilité + moyenne mobile)
+- Plan de trading assisté par budget (simulation d'allocation, non exécutable)
 - Backtesting sur historique (réservé admin)
 - Dashboard web en temps réel (look cyber/futuriste + trends + insights)
 - Graphiques avancés (candles, moyenne mobile, volatilité, heatmap)
@@ -79,6 +80,8 @@ docker compose up -d --build
 - `AUTH_SECRET`: secret de signature de session (aléatoire, **32+ caractères**, ne jamais laisser la valeur par défaut)
 - `STRATEGY_*`: paramètres stratégie dynamique
 - `BACKTEST_*`: paramètres de validation historique
+- `TRADING_BUDGET_DEFAULT`: budget par défaut pour le plan de trading simulé
+- `TRADING_MAX_POSITIONS`: nombre max de positions dans le plan simulé
 - `FACTION_ID`: active le mode War Room si > 0
 
 ## Auth & rôles
