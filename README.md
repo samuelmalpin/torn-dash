@@ -34,8 +34,8 @@ cp .env.example .env
 
 2. Remplir les variables dans `.env` (au minimum `TORN_API_KEY`).
 	Pour sécuriser l'accès internet, configure impérativement:
-	- `AUTH_SECRET`
 	- `DASHBOARD_USERS`
+	- `AUTH_SECRET` (ou laisse vide/par défaut pour génération auto persistée)
 
 3. Lancer le service :
 
@@ -46,7 +46,7 @@ docker compose up -d --build
 4. Ouvrir le dashboard :
 
 ```text
-http://localhost:8000
+http://localhost:12000
 ```
 
 ## Déploiement Debian 13 (personnel)
@@ -82,7 +82,8 @@ docker compose up -d --build
 - `ALERT_COOLDOWN_SECONDS`: délai minimum entre 2 alertes identiques
 - `DASHBOARD_HISTORY_POINTS`: profondeur des courbes sur le dashboard
 - `DASHBOARD_USERS`: utilisateurs `username:password:role`
-- `AUTH_SECRET`: secret de signature de session (aléatoire, **32+ caractères**, ne jamais laisser la valeur par défaut)
+- `AUTH_SECRET`: secret de signature de session (**32+ caractères**). Si vide/par défaut/trop court, le bot en génère un automatiquement.
+- `AUTH_SECRET_FILE`: chemin du fichier de persistance du secret auto-généré (défaut: `./data/.auth_secret`)
 - `STRATEGY_*`: paramètres stratégie dynamique
 - `BACKTEST_*`: paramètres de validation historique
 - `TRADING_BUDGET_DEFAULT`: budget par défaut pour le plan de trading simulé

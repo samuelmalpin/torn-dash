@@ -1,11 +1,19 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import secrets
 from typing import Literal
 
 from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
 
 load_dotenv()
+
+DEFAULT_TRACKED_ITEM_IDS = (
+    "372,403,1143,1084,1301,42,37,1123,1300,956,172,394,1306,1094,180,884,210,209,310,43,"
+    "1201,1205,205,1303,392,1125,68,1081,1078,1083,1082,196,1079,1458,67,66,1302,1344,731,"
+    "1459,1460,883,1457,1219,1080,527,365,206,366,370"
+)
+INSECURE_DEFAULT_AUTH_SECRET = "change-this-secret"
 
 
 def _parse_int_list(value: str) -> list[int]:
@@ -48,6 +56,34 @@ def _parse_channel_rules(value: str) -> dict[str, list[str]]:
     return rules
 
 
+def _is_secure_auth_secret(value: str) -> bool:
+    secret = value.strip()
+    if not secret or secret == INSECURE_DEFAULT_AUTH_SECRET:
+        return False
+    return len(secret) >= 32
+
+
+def _resolve_auth_secret(configured_secret: str, database_path: str, configured_secret_file: str) -> str:
+    if _is_secure_auth_secret(configured_secret):
+        return configured_secret.strip()
+
+    if configured_secret_file.strip():
+        secret_file = Path(configured_secret_file.strip())
+    else:
+        secret_file = Path(database_path).parent / ".auth_secret"
+
+    secret_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if secret_file.exists():
+        stored_secret = secret_file.read_text(encoding="utf-8").strip()
+        if _is_secure_auth_secret(stored_secret):
+            return stored_secret
+
+    generated_secret = secrets.token_urlsafe(48)
+    secret_file.write_text(generated_secret, encoding="utf-8")
+    return generated_secret
+
+
 @dataclass
 class Settings:
     torn_api_key: str = os.getenv("TORN_API_KEY", "")
@@ -67,7 +103,8 @@ class Settings:
     database_path: str = os.getenv("DATABASE_PATH", "./data/torn_nexus.db")
 
     dashboard_users: dict[str, dict[str, str]] = None
-    auth_secret: str = os.getenv("AUTH_SECRET", "change-this-secret")
+    auth_secret: str = os.getenv("AUTH_SECRET", INSECURE_DEFAULT_AUTH_SECRET)
+    auth_secret_file: str = os.getenv("AUTH_SECRET_FILE", "")
     auth_session_hours: int = int(os.getenv("AUTH_SESSION_HOURS", "12"))
 
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -96,8 +133,12 @@ class Settings:
     faction_poll_interval_seconds: int = int(os.getenv("FACTION_POLL_INTERVAL_SECONDS", "90"))
 
     def __post_init__(self) -> None:
-        self.tracked_item_ids = _parse_int_list(os.getenv("TRACKED_ITEM_IDS", ""))
-        self.auto_discovery_pool_ids = _parse_int_list(os.getenv("AUTO_DISCOVERY_POOL_IDS", ""))
+        Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
+        self.tracked_item_ids = _parse_int_list(os.getenv("TRACKED_ITEM_IDS", DEFAULT_TRACKED_ITEM_IDS))
+        self.auto_discovery_pool_ids = _parse_int_list(
+            os.getenv("AUTO_DISCOVERY_POOL_IDS", DEFAULT_TRACKED_ITEM_IDS)
+        )
+        self.auth_secret = _resolve_auth_secret(self.auth_secret, self.database_path, self.auth_secret_file)
         self.dashboard_users = _parse_users(os.getenv("DASHBOARD_USERS", "admin:admin123:admin"))
         self.alert_channel_rules = _parse_channel_rules(
             os.getenv(
@@ -105,7 +146,6 @@ class Settings:
                 "price_drop:discord|telegram;energy:discord;error:discord|email;event:discord",
             )
         )
-        Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()
