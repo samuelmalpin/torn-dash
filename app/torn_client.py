@@ -6,6 +6,14 @@ from typing import Any
 import aiohttp
 
 
+class TornApiError(RuntimeError):
+    def __init__(self, code: int | None, message: str, raw: Any = None) -> None:
+        self.code = code
+        self.message = message
+        self.raw = raw
+        super().__init__(f"Torn API error ({code}): {message}" if code is not None else f"Torn API error: {message}")
+
+
 class TornClient:
     def __init__(self, api_key: str, base_url: str) -> None:
         self.api_key = api_key
@@ -32,32 +40,42 @@ class TornClient:
             response.raise_for_status()
             payload = await response.json()
             if "error" in payload:
-                raise RuntimeError(f"Torn API error: {payload['error']}")
+                error_payload = payload.get("error")
+                if isinstance(error_payload, dict):
+                    error_code = error_payload.get("code")
+                    try:
+                        parsed_code = int(error_code) if error_code is not None else None
+                    except (TypeError, ValueError):
+                        parsed_code = None
+                    error_message = str(error_payload.get("error", "Unknown error"))
+                else:
+                    parsed_code = None
+                    error_message = str(error_payload)
+                raise TornApiError(parsed_code, error_message, error_payload)
             return payload
 
     async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         try:
             return await self._get(path, params)
-        except RuntimeError as exc:
-            message = str(exc)
-            wants_v2 = "only available in API v2" in message
+        except TornApiError as exc:
+            wants_v2 = exc.code == 23
             base_is_v2 = self.base_url.rstrip("/").endswith("/v2")
             if not wants_v2 or base_is_v2:
                 raise
             return await self._get(f"v2/{path.lstrip('/')}", params)
 
     async def _get_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any]:
-        last_error: RuntimeError | None = None
+        last_error: TornApiError | None = None
         for selection in selections_candidates:
             try:
                 return await self._get_with_v2_fallback(path, {"selections": selection})
-            except RuntimeError as exc:
+            except TornApiError as exc:
                 last_error = exc
-                if "Wrong fields" not in str(exc):
+                if exc.code != 4:
                     raise
         if last_error:
             raise last_error
-        raise RuntimeError("Torn API error: no supported selections")
+        raise TornApiError(None, "no supported selections")
 
     async def fetch_user_data(self) -> dict[str, Any]:
         payload = await self._get_first_supported(

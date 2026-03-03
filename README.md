@@ -64,6 +64,7 @@ docker compose up -d --build
 ## Variables principales
 
 - `TORN_API_KEY`: clé API Torn
+- `TORN_API_BASE`: base URL API Torn (défaut recommandé: `https://api.torn.com/v2`)
 - `POLL_INTERVAL_SECONDS`: fréquence de polling user/events
 - `MARKET_POLL_INTERVAL_SECONDS`: fréquence de polling marché
 - `TRACKED_ITEM_IDS`: IDs d'items Torn séparés par virgule

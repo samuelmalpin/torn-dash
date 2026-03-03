@@ -51,7 +51,7 @@ def _parse_channel_rules(value: str) -> dict[str, list[str]]:
 @dataclass
 class Settings:
     torn_api_key: str = os.getenv("TORN_API_KEY", "")
-    torn_api_base: str = os.getenv("TORN_API_BASE", "https://api.torn.com")
+    torn_api_base: str = os.getenv("TORN_API_BASE", "https://api.torn.com/v2")
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
     market_poll_interval_seconds: int = int(os.getenv("MARKET_POLL_INTERVAL_SECONDS", "120"))
     tracked_item_ids: list[int] = None
