@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Torn Nexus • Login</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <main class="auth-main">
+      <section class="card auth-card">
+        <h1>Torn Nexus</h1>
+        <p class="auth-subtitle">Secure dashboard access</p>
+        <form id="login-form" class="auth-form">
+          <label>
+            Username
+            <input type="text" id="username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" id="password" required />
+          </label>
+          <button type="submit" class="ghost-btn auth-btn">Login</button>
+        </form>
+        <p id="login-error" class="login-error"></p>
+      </section>
+    </main>
+
+    <script>
+      const form = document.getElementById("login-form");
+      const errorBox = document.getElementById("login-error");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        errorBox.textContent = "";
+
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+
+        try {
+          const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Identifiants invalides");
+          }
+
+          window.location.href = "/";
+        } catch (error) {
+          errorBox.textContent = error.message || "Erreur login";
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Torn Nexus</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="bg-grid"></div>
+    <header class="topbar">
+      <div>
+        <h1>Torn Nexus</h1>
+        <p>Cyber intelligence dashboard</p>
+      </div>
+      <div class="top-actions">
+        <div class="pill" id="health-pill">Connexion...</div>
+        <div class="pill" id="user-pill">--</div>
+        <button id="logout-btn" class="ghost-btn">Logout</button>
+      </div>
+    </header>
+
+    <main class="dashboard" id="dashboard-widgets">
+      <section class="card stats widget" data-widget="stats">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Stats joueur</h2>
+        <div class="stats-grid">
+          <div><span>Niveau</span><strong id="level">--</strong></div>
+          <div><span>Money</span><strong id="money">--</strong></div>
+          <div><span>Points</span><strong id="points">--</strong></div>
+          <div><span>Energy</span><strong id="energy">--</strong></div>
+          <div><span>Nerve</span><strong id="nerve">--</strong></div>
+          <div><span>Dernière sync</span><strong id="timestamp">--</strong></div>
+        </div>
+      </section>
+
+      <section class="card widget" data-widget="trends">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Trajectoires</h2>
+        <div class="chart-grid">
+          <div class="chart-card">
+            <span>Money trend</span>
+            <svg id="chart-money" viewBox="0 0 320 90" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="chart-card">
+            <span>Energy trend</span>
+            <svg id="chart-energy" viewBox="0 0 320 90" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="chart-card">
+            <span>Points trend</span>
+            <svg id="chart-points" viewBox="0 0 320 90" preserveAspectRatio="none"></svg>
+          </div>
+        </div>
+      </section>
+
+      <section class="card widget" data-widget="insights">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Insights marché</h2>
+        <div id="insights-grid" class="insights-grid"></div>
+      </section>
+
+      <section class="card widget" data-widget="market-signals">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Signaux marché</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Heure</th>
+              <th>Item</th>
+              <th>Prix bas</th>
+            </tr>
+          </thead>
+          <tbody id="market-body"></tbody>
+        </table>
+      </section>
+
+      <section class="card widget" data-widget="advanced-market">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Marché avancé</h2>
+        <div class="market-controls">
+          <label for="market-item-select">Item:</label>
+          <select id="market-item-select"></select>
+          <button id="run-backtest-btn" class="ghost-btn">Backtest (admin)</button>
+        </div>
+        <div id="backtest-box" class="backtest-box empty">Aucun backtest exécuté.</div>
+        <div class="chart-grid one-col">
+          <div class="chart-card">
+            <span>Candles + MA</span>
+            <svg id="chart-candles" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="chart-card">
+            <span>Volatilité</span>
+            <svg id="chart-volatility" viewBox="0 0 640 100" preserveAspectRatio="none"></svg>
+          </div>
+        </div>
+        <div>
+          <h3>Heatmap prix</h3>
+          <div id="heatmap" class="heatmap"></div>
+        </div>
+      </section>
+
+      <section class="card widget" data-widget="alerts">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Alertes</h2>
+        <ul id="alerts-list"></ul>
+      </section>
+
+      <section class="card widget" data-widget="war-room">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>War Room Faction</h2>
+        <div id="war-room-box" class="war-room-box empty">Aucune donnée faction (configure FACTION_ID).</div>
+      </section>
+
+      <section class="card widget" data-widget="events">
+        <button class="drag-handle" title="Déplacer">⋮⋮</button>
+        <h2>Événements Torn</h2>
+        <ul id="events-list"></ul>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

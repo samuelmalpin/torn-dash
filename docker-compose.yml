@@ -1,0 +1,11 @@
+services:
+  torn-nexus:
+    build: .
+    container_name: torn-nexus
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
