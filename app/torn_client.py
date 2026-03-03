@@ -18,6 +18,15 @@ class TornClient:
     def __init__(self, api_key: str, base_url: str) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        if self.base_url.endswith("/v2"):
+            self.base_v1_url = self.base_url[: -len("/v2")]
+            self.base_v2_url = self.base_url
+        elif self.base_url.endswith("/v1"):
+            self.base_v1_url = self.base_url
+            self.base_v2_url = f"{self.base_url[: -len('/v1')]}/v2"
+        else:
+            self.base_v1_url = self.base_url
+            self.base_v2_url = f"{self.base_url}/v2"
         self._session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
@@ -29,12 +38,13 @@ class TornClient:
             await self._session.close()
             self._session = None
 
-    async def _get(self, path: str, params: dict[str, Any]) -> Any:
+    async def _get(self, path: str, params: dict[str, Any], *, base_url: str | None = None) -> Any:
         if self._session is None:
             raise RuntimeError("TornClient not started")
 
         enriched_params = {**params, "key": self.api_key}
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        effective_base = (base_url or self.base_url).rstrip("/")
+        url = f"{effective_base}/{path.lstrip('/')}"
 
         async with self._session.get(url, params=enriched_params) as response:
             response.raise_for_status()
@@ -55,14 +65,18 @@ class TornClient:
             return payload
 
     async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> Any:
+        base_is_v2 = self.base_url.rstrip("/").endswith("/v2")
+        initial_base = self.base_v2_url if base_is_v2 else self.base_v1_url
         try:
-            return await self._get(path, params)
+            return await self._get(path, params, base_url=initial_base)
         except TornApiError as exc:
-            wants_v2 = exc.code == 23
-            base_is_v2 = self.base_url.rstrip("/").endswith("/v2")
-            if not wants_v2 or base_is_v2:
+            if exc.code == 23 and not base_is_v2:
+                return await self._get(path, params, base_url=self.base_v2_url)
+            if exc.code == 22 and base_is_v2:
+                return await self._get(path, params, base_url=self.base_v1_url)
+            if exc.code in {22, 23}:
                 raise
-            return await self._get(f"v2/{path.lstrip('/')}", params)
+            raise
 
     async def _get_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any]:
         last_error: TornApiError | None = None
