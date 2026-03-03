@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from statistics import mean, pstdev
 
 from app.config import settings
 from app.notifier import Notifier
@@ -29,6 +30,7 @@ class TornNexusService:
         self._energy_full_notified = False
         self._last_alert_sent_at: dict[str, float] = {}
         self._market_refresh_lock = asyncio.Lock()
+        self._dynamic_tracked_item_ids: list[int] = list(settings.tracked_item_ids)
 
     async def start(self) -> None:
         if self._running:
@@ -118,9 +120,10 @@ class TornNexusService:
 
     async def refresh_market_now(self) -> dict[str, int]:
         async with self._market_refresh_lock:
+            scan_ids = self._get_scan_item_ids()
             fetched = 0
             inserted = 0
-            for item_id in settings.tracked_item_ids:
+            for item_id in scan_ids:
                 price_payload = await self.client.fetch_market_price(item_id)
                 if not price_payload:
                     continue
@@ -129,7 +132,69 @@ class TornNexusService:
                 inserted += 1
                 await self._check_price_alert(price_payload)
 
-            return {"fetched": fetched, "inserted": inserted, "tracked": len(settings.tracked_item_ids)}
+            if settings.auto_discovery_enabled:
+                self._refresh_dynamic_tracked_item_ids(scan_ids)
+
+            return {
+                "fetched": fetched,
+                "inserted": inserted,
+                "tracked": len(self.get_effective_tracked_item_ids()),
+                "scanned": len(scan_ids),
+            }
+
+    def get_effective_tracked_item_ids(self) -> list[int]:
+        if settings.auto_discovery_enabled and self._dynamic_tracked_item_ids:
+            return list(self._dynamic_tracked_item_ids)
+        return list(settings.tracked_item_ids)
+
+    def _get_scan_item_ids(self) -> list[int]:
+        if settings.auto_discovery_enabled and settings.auto_discovery_pool_ids:
+            return list(settings.auto_discovery_pool_ids)
+        return list(settings.tracked_item_ids)
+
+    def _refresh_dynamic_tracked_item_ids(self, candidate_ids: list[int]) -> None:
+        ranked = self._rank_candidate_items(candidate_ids)
+        if ranked:
+            top_n = max(1, settings.auto_discovery_top_n)
+            self._dynamic_tracked_item_ids = [row["item_id"] for row in ranked[:top_n]]
+            return
+
+        self._dynamic_tracked_item_ids = list(settings.tracked_item_ids)
+
+    def _rank_candidate_items(self, candidate_ids: list[int]) -> list[dict[str, float | int]]:
+        rows: list[dict[str, float | int]] = []
+        window = max(8, settings.auto_discovery_stats_window)
+
+        for item_id in candidate_ids:
+            series = self.storage.get_market_prices_for_item(item_id=item_id, limit=window)
+            prices = [int(row["lowest_price"]) for row in series if int(row.get("lowest_price", 0)) > 0]
+            samples = len(prices)
+            if samples < max(6, min(window, 12)):
+                continue
+
+            avg_price = mean(prices)
+            if avg_price <= 0:
+                continue
+
+            volatility_pct = (pstdev(prices) / avg_price) * 100 if samples >= 2 else 0.0
+            spread_pct = ((max(prices) - min(prices)) / avg_price) * 100 if samples >= 2 else 0.0
+            liquidity_score = min(100.0, (samples / window) * 100)
+            volatility_score = min(100.0, volatility_pct * 4)
+            spread_score = min(100.0, spread_pct * 2.5)
+
+            score = liquidity_score * 0.45 + volatility_score * 0.30 + spread_score * 0.25
+            rows.append(
+                {
+                    "item_id": item_id,
+                    "score": round(score, 3),
+                    "liquidity": round(liquidity_score, 3),
+                    "volatility": round(volatility_score, 3),
+                    "spread": round(spread_score, 3),
+                }
+            )
+
+        rows.sort(key=lambda row: (float(row["score"]), float(row["liquidity"])), reverse=True)
+        return rows
 
     async def _poll_faction_loop(self) -> None:
         while self._running:

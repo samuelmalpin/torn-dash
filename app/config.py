@@ -55,6 +55,10 @@ class Settings:
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
     market_poll_interval_seconds: int = int(os.getenv("MARKET_POLL_INTERVAL_SECONDS", "120"))
     tracked_item_ids: list[int] = None
+    auto_discovery_enabled: bool = os.getenv("AUTO_DISCOVERY_ENABLED", "0") == "1"
+    auto_discovery_pool_ids: list[int] = None
+    auto_discovery_top_n: int = int(os.getenv("AUTO_DISCOVERY_TOP_N", "12"))
+    auto_discovery_stats_window: int = int(os.getenv("AUTO_DISCOVERY_STATS_WINDOW", "36"))
     price_drop_alert_percent: float = float(os.getenv("PRICE_DROP_ALERT_PERCENT", "12"))
     alert_cooldown_seconds: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "600"))
     discord_webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL", "")
@@ -93,6 +97,7 @@ class Settings:
 
     def __post_init__(self) -> None:
         self.tracked_item_ids = _parse_int_list(os.getenv("TRACKED_ITEM_IDS", ""))
+        self.auto_discovery_pool_ids = _parse_int_list(os.getenv("AUTO_DISCOVERY_POOL_IDS", ""))
         self.dashboard_users = _parse_users(os.getenv("DASHBOARD_USERS", "admin:admin123:admin"))
         self.alert_channel_rules = _parse_channel_rules(
             os.getenv(

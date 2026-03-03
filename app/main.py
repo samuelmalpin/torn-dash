@@ -66,7 +66,7 @@ def get_authenticated_user(user: dict = Depends(get_current_user)) -> dict:
 
 def _compute_opportunities_payload() -> list[dict]:
     opportunities_payload: list[dict] = []
-    for item_id in settings.tracked_item_ids:
+    for item_id in service.get_effective_tracked_item_ids():
         series = service.storage.get_market_prices_for_item(item_id=item_id, limit=220)
         if not series:
             opportunities_payload.append(
@@ -220,14 +220,17 @@ def me(user: dict = Depends(get_authenticated_user)) -> dict:
 @app.get("/api/health")
 def health(user: dict = Depends(get_authenticated_user)) -> dict:
     _ = user
+    tracked_items = service.get_effective_tracked_item_ids()
     return {
         "status": "ok",
         "torn_configured": bool(settings.torn_api_key),
-        "tracked_items": settings.tracked_item_ids,
+        "tracked_items": tracked_items,
         "history_points": settings.dashboard_history_points,
         "faction_id": settings.faction_id,
         "trading_budget_default": settings.trading_budget_default,
         "trading_max_positions": settings.trading_max_positions,
+        "auto_discovery_enabled": settings.auto_discovery_enabled,
+        "manual_tracked_items": settings.tracked_item_ids,
     }
 
 
@@ -264,8 +267,9 @@ def timeseries(
 @app.get("/api/insights")
 def insights(user: dict = Depends(get_authenticated_user)) -> dict:
     _ = user
+    tracked_items = service.get_effective_tracked_item_ids()
     return {
-        "market": service.storage.get_market_insights(settings.tracked_item_ids),
+        "market": service.storage.get_market_insights(tracked_items),
     }
 
 

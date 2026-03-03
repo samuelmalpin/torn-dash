@@ -12,6 +12,7 @@ Bot Torn + dashboard web futuriste, prêt pour un déploiement personnel sur Doc
 - Stratégie de BUY signal à seuil dynamique (volatilité + moyenne mobile)
 - Plan de trading assisté par budget (simulation d'allocation, non exécutable)
 - Backtesting sur historique (réservé admin)
+- Auto-discovery optionnel des items (scan pool d'IDs, scoring liquidité/volatilité/spread)
 - Dashboard web en temps réel (look cyber/futuriste + trends + insights)
 - Graphiques avancés (candles, moyenne mobile, volatilité, heatmap)
 - Mode War Room faction (activité live, chain timer, membres critiques)
@@ -69,6 +70,10 @@ docker compose up -d --build
 - `POLL_INTERVAL_SECONDS`: fréquence de polling user/events
 - `MARKET_POLL_INTERVAL_SECONDS`: fréquence de polling marché
 - `TRACKED_ITEM_IDS`: IDs d'items Torn séparés par virgule
+- `AUTO_DISCOVERY_ENABLED`: active la sélection automatique des meilleurs items (0/1)
+- `AUTO_DISCOVERY_POOL_IDS`: pool d'IDs à scanner (si vide, fallback sur `TRACKED_ITEM_IDS`)
+- `AUTO_DISCOVERY_TOP_N`: nombre d'items retenus automatiquement
+- `AUTO_DISCOVERY_STATS_WINDOW`: taille d'historique pour le scoring auto-discovery
 - `DISCORD_WEBHOOK_URL`: webhook Discord pour alertes
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: canal Telegram
 - `SMTP_*` + `EMAIL_FROM`/`EMAIL_TO`: alertes email
@@ -83,6 +88,12 @@ docker compose up -d --build
 - `TRADING_BUDGET_DEFAULT`: budget par défaut pour le plan de trading simulé
 - `TRADING_MAX_POSITIONS`: nombre max de positions dans le plan simulé
 - `FACTION_ID`: active le mode War Room si > 0
+
+## Auto-discovery (fallback manuel)
+
+- Si `AUTO_DISCOVERY_ENABLED=1`, le bot scanne le pool d'IDs (`AUTO_DISCOVERY_POOL_IDS`) et retient dynamiquement les meilleurs.
+- Le dashboard et les endpoints de signaux utilisent alors cette liste dynamique.
+- Si aucun candidat valide n'est trouvé, fallback automatique sur `TRACKED_ITEM_IDS`.
 
 ## Auth & rôles
 
