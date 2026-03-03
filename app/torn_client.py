@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any
 
 import aiohttp
+
+
+logger = logging.getLogger(__name__)
 
 
 class TornApiError(RuntimeError):
@@ -28,6 +32,7 @@ class TornClient:
             self.base_v1_url = self.base_url
             self.base_v2_url = f"{self.base_url}/v2"
         self._session: aiohttp.ClientSession | None = None
+        self._diagnostics_once: set[str] = set()
 
     async def start(self) -> None:
         if self._session is None:
@@ -144,6 +149,17 @@ class TornClient:
             payload.get("points"),
         )
 
+        if money_value == 0 or points_value == 0:
+            payload_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+            self._log_diagnostic_once(
+                f"user-zero-values:{money_value}:{points_value}:{','.join(payload_keys)}",
+                "User snapshot has zero values (money=%s, points=%s). payload keys=%s base=%s",
+                money_value,
+                points_value,
+                payload_keys,
+                self.base_url,
+            )
+
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": level_value,
@@ -168,6 +184,7 @@ class TornClient:
         return 0
 
     async def _get_optional_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any] | None:
+        rejected: list[tuple[str, int | None, str]] = []
         for selection in selections_candidates:
             try:
                 payload = await self._get_with_v2_fallback(path, {"selections": selection})
@@ -175,9 +192,25 @@ class TornClient:
                     return payload
             except TornApiError as exc:
                 if exc.code in {4, 16, 22, 23}:
+                    rejected.append((selection, exc.code, exc.message))
                     continue
                 raise
+
+        if rejected:
+            details = ", ".join([f"{selection}: code={code} message={message}" for selection, code, message in rejected])
+            self._log_diagnostic_once(
+                f"optional-selection-failed:{path}:{'|'.join(selections_candidates)}:{details}",
+                "Optional Torn selection(s) not available for %s -> %s",
+                path,
+                details,
+            )
         return None
+
+    def _log_diagnostic_once(self, key: str, message: str, *args: Any) -> None:
+        if key in self._diagnostics_once:
+            return
+        self._diagnostics_once.add(key)
+        logger.warning(message, *args)
 
     async def fetch_market_price(self, item_id: int) -> dict[str, Any] | None:
         payload = await self._get_with_v2_fallback(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
