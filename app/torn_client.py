@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import logging
+from time import monotonic
 from typing import Any
 
 import aiohttp
+
+from app.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +37,8 @@ class TornClient:
             self.base_v2_url = f"{self.base_url}/v2"
         self._session: aiohttp.ClientSession | None = None
         self._diagnostics_once: set[str] = set()
+        self._request_lock = asyncio.Lock()
+        self._last_request_started_at = 0.0
 
     async def start(self) -> None:
         if self._session is None:
@@ -51,23 +57,68 @@ class TornClient:
         effective_base = (base_url or self.base_url).rstrip("/")
         url = f"{effective_base}/{path.lstrip('/')}"
 
-        async with self._session.get(url, params=enriched_params) as response:
-            response.raise_for_status()
-            payload = await response.json()
+        retries = max(0, settings.torn_rate_limit_retry_count)
+        for attempt in range(retries + 1):
+            await self._apply_request_spacing()
+            try:
+                async with self._session.get(url, params=enriched_params) as response:
+                    if response.status == 429:
+                        raise TornApiError(5, "Too many requests (HTTP 429)")
+                    response.raise_for_status()
+                    payload = await response.json()
+            except aiohttp.ClientResponseError as exc:
+                if exc.status == 429 and attempt < retries:
+                    await self._sleep_rate_limited(attempt, url)
+                    continue
+                raise
+
             if isinstance(payload, dict) and "error" in payload:
-                error_payload = payload.get("error")
-                if isinstance(error_payload, dict):
-                    error_code = error_payload.get("code")
-                    try:
-                        parsed_code = int(error_code) if error_code is not None else None
-                    except (TypeError, ValueError):
-                        parsed_code = None
-                    error_message = str(error_payload.get("error", "Unknown error"))
-                else:
-                    parsed_code = None
-                    error_message = str(error_payload)
-                raise TornApiError(parsed_code, error_message, error_payload)
+                parsed_error = self._parse_torn_error(payload.get("error"))
+                if parsed_error.code == 5 and attempt < retries:
+                    await self._sleep_rate_limited(attempt, url)
+                    continue
+                raise parsed_error
+
             return payload
+
+        raise TornApiError(5, "Too many requests")
+
+    @staticmethod
+    def _parse_torn_error(error_payload: Any) -> TornApiError:
+        if isinstance(error_payload, dict):
+            error_code = error_payload.get("code")
+            try:
+                parsed_code = int(error_code) if error_code is not None else None
+            except (TypeError, ValueError):
+                parsed_code = None
+            error_message = str(error_payload.get("error", "Unknown error"))
+            return TornApiError(parsed_code, error_message, error_payload)
+
+        return TornApiError(None, str(error_payload), error_payload)
+
+    async def _apply_request_spacing(self) -> None:
+        minimum_interval = max(0.0, settings.torn_min_request_interval_seconds)
+        if minimum_interval <= 0:
+            return
+
+        async with self._request_lock:
+            now = monotonic()
+            elapsed = now - self._last_request_started_at
+            wait = minimum_interval - elapsed
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request_started_at = monotonic()
+
+    async def _sleep_rate_limited(self, attempt: int, url: str) -> None:
+        base_delay = max(0.5, settings.torn_rate_limit_backoff_seconds)
+        sleep_seconds = base_delay * (attempt + 1)
+        logger.warning(
+            "Torn API rate limit hit (attempt %s). Retrying in %.1fs for %s",
+            attempt + 1,
+            sleep_seconds,
+            url,
+        )
+        await asyncio.sleep(sleep_seconds)
 
     async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> Any:
         base_is_v2 = self.base_url.rstrip("/").endswith("/v2")

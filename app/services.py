@@ -30,6 +30,7 @@ class TornNexusService:
         self._energy_full_notified = False
         self._last_alert_sent_at: dict[str, float] = {}
         self._market_refresh_lock = asyncio.Lock()
+        self._market_scan_cursor = 0
         self._dynamic_tracked_item_ids: list[int] = list(settings.tracked_item_ids)
 
     async def start(self) -> None:
@@ -120,12 +121,13 @@ class TornNexusService:
 
     async def refresh_market_now(self) -> dict[str, int]:
         async with self._market_refresh_lock:
-            scan_ids = self._get_scan_item_ids()
+            candidate_ids = self._get_scan_item_ids()
+            scan_ids = self._get_market_scan_batch(candidate_ids)
             fetched = 0
             inserted = 0
             failed = 0
             rate_limited = False
-            for item_id in scan_ids:
+            for index, item_id in enumerate(scan_ids):
                 try:
                     price_payload = await self.client.fetch_market_price(item_id)
                 except TornApiError as exc:
@@ -155,17 +157,23 @@ class TornNexusService:
                             "message": f"Market fetch error for item {item_id}: {exc}",
                         }
                     )
+                    if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
+                        await asyncio.sleep(settings.market_request_spacing_seconds)
                     continue
 
                 if not price_payload:
+                    if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
+                        await asyncio.sleep(settings.market_request_spacing_seconds)
                     continue
                 fetched += 1
                 self.storage.add_market_price(price_payload)
                 inserted += 1
                 await self._check_price_alert(price_payload)
+                if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
+                    await asyncio.sleep(settings.market_request_spacing_seconds)
 
             if settings.auto_discovery_enabled:
-                self._refresh_dynamic_tracked_item_ids(scan_ids)
+                self._refresh_dynamic_tracked_item_ids(candidate_ids)
 
             return {
                 "fetched": fetched,
@@ -173,8 +181,28 @@ class TornNexusService:
                 "failed": failed,
                 "tracked": len(self.get_effective_tracked_item_ids()),
                 "scanned": len(scan_ids),
+                "scanned_total": len(candidate_ids),
                 "rate_limited": int(rate_limited),
             }
+
+    def _get_market_scan_batch(self, item_ids: list[int]) -> list[int]:
+        if not item_ids:
+            return []
+
+        cycle_size = max(1, settings.market_max_items_per_cycle)
+        if len(item_ids) <= cycle_size:
+            return list(item_ids)
+
+        start = self._market_scan_cursor % len(item_ids)
+        end = start + cycle_size
+        if end <= len(item_ids):
+            batch = item_ids[start:end]
+        else:
+            overflow = end - len(item_ids)
+            batch = item_ids[start:] + item_ids[:overflow]
+
+        self._market_scan_cursor = (start + cycle_size) % len(item_ids)
+        return batch
 
     def get_effective_tracked_item_ids(self) -> list[int]:
         if settings.auto_discovery_enabled and self._dynamic_tracked_item_ids:

@@ -67,8 +67,13 @@ docker compose up -d --build
 
 - `TORN_API_KEY`: clé API Torn
 - `TORN_API_BASE`: base URL API Torn (défaut recommandé: `https://api.torn.com/v2`)
+- `TORN_MIN_REQUEST_INTERVAL_SECONDS`: délai minimal global entre 2 requêtes Torn (toutes routes)
+- `TORN_RATE_LIMIT_RETRY_COUNT`: nombre de retries automatiques sur rate-limit Torn (code 5 / HTTP 429)
+- `TORN_RATE_LIMIT_BACKOFF_SECONDS`: base du délai de backoff progressif sur rate-limit
 - `POLL_INTERVAL_SECONDS`: fréquence de polling user/events
 - `MARKET_POLL_INTERVAL_SECONDS`: fréquence de polling marché
+- `MARKET_MAX_ITEMS_PER_CYCLE`: nombre max d'items market scannés par cycle (scan tournant)
+- `MARKET_REQUEST_SPACING_SECONDS`: délai entre 2 appels market pour lisser la charge API
 - `TRACKED_ITEM_IDS`: IDs d'items Torn séparés par virgule
 - `AUTO_DISCOVERY_ENABLED`: active la sélection automatique des meilleurs items (0/1)
 - `AUTO_DISCOVERY_POOL_IDS`: pool d'IDs à scanner (si vide, fallback sur `TRACKED_ITEM_IDS`)

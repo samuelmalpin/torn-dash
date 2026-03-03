@@ -88,8 +88,13 @@ def _resolve_auth_secret(configured_secret: str, database_path: str, configured_
 class Settings:
     torn_api_key: str = os.getenv("TORN_API_KEY", "")
     torn_api_base: str = os.getenv("TORN_API_BASE", "https://api.torn.com/v2")
+    torn_min_request_interval_seconds: float = float(os.getenv("TORN_MIN_REQUEST_INTERVAL_SECONDS", "0.75"))
+    torn_rate_limit_retry_count: int = int(os.getenv("TORN_RATE_LIMIT_RETRY_COUNT", "2"))
+    torn_rate_limit_backoff_seconds: float = float(os.getenv("TORN_RATE_LIMIT_BACKOFF_SECONDS", "4.0"))
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
     market_poll_interval_seconds: int = int(os.getenv("MARKET_POLL_INTERVAL_SECONDS", "120"))
+    market_max_items_per_cycle: int = int(os.getenv("MARKET_MAX_ITEMS_PER_CYCLE", "20"))
+    market_request_spacing_seconds: float = float(os.getenv("MARKET_REQUEST_SPACING_SECONDS", "1.2"))
     tracked_item_ids: list[int] = None
     auto_discovery_enabled: bool = os.getenv("AUTO_DISCOVERY_ENABLED", "0") == "1"
     auto_discovery_pool_ids: list[int] = None

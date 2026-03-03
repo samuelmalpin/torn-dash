@@ -13,6 +13,7 @@ from pydantic import BaseModel # pyright: ignore[reportMissingImports]
 from app.auth import authenticate_user, create_session_token, decode_session_token, is_auth_secret_secure
 from app.config import settings
 from app.services import TornNexusService
+from app.torn_client import TornApiError
 
 service = TornNexusService()
 logger = logging.getLogger(__name__)
@@ -249,8 +250,17 @@ def market(user: dict = Depends(get_authenticated_user)) -> dict:
 @app.post("/api/market/poll-now")
 async def market_poll_now(user: dict = Depends(get_authenticated_user)) -> dict:
     _ = user
-    result = await service.refresh_market_now()
-    return {"ok": True, **result}
+    try:
+        result = await service.refresh_market_now()
+        return {"ok": True, **result}
+    except TornApiError as exc:
+        if exc.code == 5:
+            return {
+                "ok": False,
+                "error": "rate_limited",
+                "detail": "Too many requests from Torn API. Try again later.",
+            }
+        raise
 
 
 @app.get("/api/timeseries")
