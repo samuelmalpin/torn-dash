@@ -35,11 +35,44 @@ class TornClient:
                 raise RuntimeError(f"Torn API error: {payload['error']}")
             return payload
 
+    async def _get_with_v2_fallback(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await self._get(path, params)
+        except RuntimeError as exc:
+            message = str(exc)
+            wants_v2 = "only available in API v2" in message
+            base_is_v2 = self.base_url.rstrip("/").endswith("/v2")
+            if not wants_v2 or base_is_v2:
+                raise
+            return await self._get(f"v2/{path.lstrip('/')}", params)
+
+    async def _get_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any]:
+        last_error: RuntimeError | None = None
+        for selection in selections_candidates:
+            try:
+                return await self._get_with_v2_fallback(path, {"selections": selection})
+            except RuntimeError as exc:
+                last_error = exc
+                if "Wrong fields" not in str(exc):
+                    raise
+        if last_error:
+            raise last_error
+        raise RuntimeError("Torn API error: no supported selections")
+
     async def fetch_user_data(self) -> dict[str, Any]:
-        payload = await self._get("user", {"selections": "profile,bars,money,points,events"})
+        payload = await self._get_first_supported(
+            "user",
+            [
+                "profile,bars,money,points,events",
+                "profile,bars,currency,events",
+                "profile,bars,events",
+                "basic,bars,events",
+            ],
+        )
 
         bars = payload.get("bars", {})
         money_data = payload.get("money", {})
+        currency_data = payload.get("currency", {})
         points_data = payload.get("points", {})
 
         return {
@@ -49,13 +82,17 @@ class TornClient:
             "energy_max": int(bars.get("energy", {}).get("maximum", 0)),
             "nerve_current": int(bars.get("nerve", {}).get("current", 0)),
             "nerve_max": int(bars.get("nerve", {}).get("maximum", 0)),
-            "money": int(money_data.get("money_onhand", payload.get("money_onhand", 0))),
-            "points": int(points_data.get("points", payload.get("points", 0))),
+            "money": int(
+                money_data.get("money_onhand")
+                or currency_data.get("money_onhand")
+                or payload.get("money_onhand", 0)
+            ),
+            "points": int(points_data.get("points") or payload.get("points", 0)),
             "events": self._extract_events(payload.get("events", {})),
         }
 
     async def fetch_market_price(self, item_id: int) -> dict[str, Any] | None:
-        payload = await self._get(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
+        payload = await self._get_with_v2_fallback(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
 
         candidates: list[int] = []
 

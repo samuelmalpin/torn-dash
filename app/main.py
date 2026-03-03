@@ -57,6 +57,11 @@ def login_page() -> FileResponse:
 
 
 @app.get("/")
+def root_page() -> FileResponse:
+    return FileResponse(static_dir / "login.html")
+
+
+@app.get("/dashboard")
 def dashboard(user: dict = Depends(get_authenticated_user)) -> FileResponse:
     _ = user
     return FileResponse(static_dir / "index.html")
