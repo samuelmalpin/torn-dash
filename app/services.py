@@ -9,7 +9,7 @@ from app.config import settings
 from app.notifier import Notifier
 from app.storage import Storage
 from app.strategy import StrategyEngine
-from app.torn_client import TornClient
+from app.torn_client import TornApiError, TornClient
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +123,40 @@ class TornNexusService:
             scan_ids = self._get_scan_item_ids()
             fetched = 0
             inserted = 0
+            failed = 0
+            rate_limited = False
             for item_id in scan_ids:
-                price_payload = await self.client.fetch_market_price(item_id)
+                try:
+                    price_payload = await self.client.fetch_market_price(item_id)
+                except TornApiError as exc:
+                    failed += 1
+                    if exc.code == 5:
+                        rate_limited = True
+                        logger.warning(
+                            "Market polling rate-limited after %s/%s items. Partial data kept.",
+                            fetched + failed,
+                            len(scan_ids),
+                        )
+                        self.storage.add_alert(
+                            {
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "kind": "error",
+                                "message": "Market polling rate-limited by Torn API (code 5). "
+                                "Increase interval or reduce tracked items.",
+                            }
+                        )
+                        break
+
+                    logger.warning("Market fetch failed for item %s: %s", item_id, exc)
+                    self.storage.add_alert(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "kind": "error",
+                            "message": f"Market fetch error for item {item_id}: {exc}",
+                        }
+                    )
+                    continue
+
                 if not price_payload:
                     continue
                 fetched += 1
@@ -138,8 +170,10 @@ class TornNexusService:
             return {
                 "fetched": fetched,
                 "inserted": inserted,
+                "failed": failed,
                 "tracked": len(self.get_effective_tracked_item_ids()),
                 "scanned": len(scan_ids),
+                "rate_limited": int(rate_limited),
             }
 
     def get_effective_tracked_item_ids(self) -> list[int]:
