@@ -77,7 +77,7 @@ def root_page(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
 
-@app.get("/dashboard")
+@app.get("/dashboard", response_model=None)
 def dashboard(request: Request) -> FileResponse | RedirectResponse:
     token = request.cookies.get("torn_session", "")
     payload = decode_session_token(token)
