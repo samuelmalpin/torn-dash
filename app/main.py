@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status # pyright: ignore[reportMissingImports]
+from fastapi.responses import FileResponse, RedirectResponse # pyright: ignore[reportMissingImports]
+from fastapi.staticfiles import StaticFiles # pyright: ignore[reportMissingImports]
+from pydantic import BaseModel # pyright: ignore[reportMissingImports]
 
-from app.auth import authenticate_user, create_session_token, decode_session_token
+from app.auth import authenticate_user, create_session_token, decode_session_token, is_auth_secret_secure
 from app.config import settings
 from app.services import TornNexusService
 
 service = TornNexusService()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -25,7 +27,17 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Torn Nexus Bot", version="1.0.0", lifespan=lifespan)
 
 static_dir = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+class AssetOnlyStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        normalized = path.lstrip("/").lower()
+        if normalized.endswith(".html"):
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        return await super().get_response(path, scope)
+
+
+app.mount("/static", AssetOnlyStaticFiles(directory=str(static_dir)), name="static")
 
 
 class LoginPayload(BaseModel):
@@ -57,18 +69,32 @@ def login_page() -> FileResponse:
 
 
 @app.get("/")
-def root_page() -> FileResponse:
-    return FileResponse(static_dir / "login.html")
+def root_page(request: Request) -> RedirectResponse:
+    token = request.cookies.get("torn_session", "")
+    payload = decode_session_token(token)
+    if payload:
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
 
 @app.get("/dashboard")
-def dashboard(user: dict = Depends(get_authenticated_user)) -> FileResponse:
-    _ = user
+def dashboard(request: Request) -> FileResponse | RedirectResponse:
+    token = request.cookies.get("torn_session", "")
+    payload = decode_session_token(token)
+    if not payload:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     return FileResponse(static_dir / "index.html")
 
 
 @app.post("/api/auth/login")
-def login(payload: LoginPayload, response: Response) -> dict:
+def login(payload: LoginPayload, request: Request, response: Response) -> dict:
+    if not is_auth_secret_secure():
+        logger.error("Refusing login: AUTH_SECRET is insecure. Set a random secret with at least 32 characters.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is temporarily unavailable: server secret misconfiguration.",
+        )
+
     profile = authenticate_user(payload.username.strip(), payload.password)
     if not profile:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -78,8 +104,9 @@ def login(payload: LoginPayload, response: Response) -> dict:
         key="torn_session",
         value=token,
         httponly=True,
-        secure=False,
+        secure=request.url.scheme == "https",
         samesite="lax",
+        path="/",
         max_age=settings.auth_session_hours * 3600,
     )
     return {"ok": True, "username": profile["username"], "role": profile["role"]}
@@ -87,7 +114,7 @@ def login(payload: LoginPayload, response: Response) -> dict:
 
 @app.post("/api/auth/logout")
 def logout(response: Response) -> dict:
-    response.delete_cookie("torn_session")
+    response.delete_cookie("torn_session", path="/")
     return {"ok": True}
 
 

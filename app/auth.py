@@ -10,6 +10,16 @@ from typing import Any
 from app.config import settings
 
 
+_INSECURE_DEFAULT_SECRET = "change-this-secret"
+
+
+def is_auth_secret_secure() -> bool:
+    secret = settings.auth_secret.strip()
+    if not secret or secret == _INSECURE_DEFAULT_SECRET:
+        return False
+    return len(secret) >= 32
+
+
 def _b64_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
@@ -25,6 +35,9 @@ def _sign(payload_b64: str) -> str:
 
 
 def create_session_token(username: str, role: str) -> str:
+    if not is_auth_secret_secure():
+        raise RuntimeError("AUTH_SECRET is not secure enough")
+
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.auth_session_hours)
     payload = {
         "username": username,
@@ -37,6 +50,9 @@ def create_session_token(username: str, role: str) -> str:
 
 
 def decode_session_token(token: str) -> dict[str, Any] | None:
+    if not is_auth_secret_secure():
+        return None
+
     if not token or "." not in token:
         return None
 

@@ -76,7 +76,7 @@ docker compose up -d --build
 - `ALERT_COOLDOWN_SECONDS`: délai minimum entre 2 alertes identiques
 - `DASHBOARD_HISTORY_POINTS`: profondeur des courbes sur le dashboard
 - `DASHBOARD_USERS`: utilisateurs `username:password:role`
-- `AUTH_SECRET`: secret de signature de session
+- `AUTH_SECRET`: secret de signature de session (aléatoire, **32+ caractères**, ne jamais laisser la valeur par défaut)
 - `STRATEGY_*`: paramètres stratégie dynamique
 - `BACKTEST_*`: paramètres de validation historique
 - `FACTION_ID`: active le mode War Room si > 0

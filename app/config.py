@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
 
 load_dotenv()
 
