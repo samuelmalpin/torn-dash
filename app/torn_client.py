@@ -117,10 +117,6 @@ class TornClient:
         if money_payload:
             payload.update(money_payload)
 
-        points_payload = await self._get_optional_first_supported("user", ["points"])
-        if points_payload:
-            payload.update(points_payload)
-
         bars = payload.get("bars", {})
         money_data = payload.get("money", {})
         currency_data = payload.get("currency", {})
@@ -141,12 +137,34 @@ class TornClient:
             profile_data.get("money_onhand"),
             profile_data.get("onhand"),
             payload.get("money_onhand"),
+            self._find_first_int_by_keys(
+                payload,
+                {
+                    "money_onhand",
+                    "onhand",
+                    "wallet",
+                    "cash",
+                    "money",
+                },
+            ),
         )
 
         points_value = self._first_int(
             points_data.get("points") if isinstance(points_data, dict) else points_data,
             profile_data.get("points"),
+            profile_data.get("pointsbalance"),
+            profile_data.get("points_balance"),
             payload.get("points"),
+            self._find_first_int_by_keys(
+                payload,
+                {
+                    "points",
+                    "pointsbalance",
+                    "points_balance",
+                    "pointsavailable",
+                    "available_points",
+                },
+            ),
         )
 
         if money_value == 0 or points_value == 0:
@@ -182,6 +200,35 @@ class TornClient:
             except (TypeError, ValueError):
                 continue
         return 0
+
+    @staticmethod
+    def _find_first_int_by_keys(source: Any, keys: set[str], depth: int = 0) -> int | None:
+        if depth > 4:
+            return None
+
+        lowered_keys = {key.lower() for key in keys}
+
+        if isinstance(source, dict):
+            for key, value in source.items():
+                if str(key).lower() in lowered_keys:
+                    try:
+                        if value is None or isinstance(value, bool):
+                            continue
+                        return int(value)
+                    except (TypeError, ValueError):
+                        pass
+            for value in source.values():
+                nested = TornClient._find_first_int_by_keys(value, keys, depth + 1)
+                if nested is not None:
+                    return nested
+
+        elif isinstance(source, list):
+            for value in source:
+                nested = TornClient._find_first_int_by_keys(value, keys, depth + 1)
+                if nested is not None:
+                    return nested
+
+        return None
 
     async def _get_optional_first_supported(self, path: str, selections_candidates: list[str]) -> dict[str, Any] | None:
         rejected: list[tuple[str, int | None, str]] = []
