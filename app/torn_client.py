@@ -92,22 +92,52 @@ class TornClient:
         money_data = payload.get("money", {})
         currency_data = payload.get("currency", {})
         points_data = payload.get("points", {})
+        profile_data = payload.get("profile", {}) if isinstance(payload.get("profile"), dict) else {}
+
+        level_value = self._first_int(
+            payload.get("level"),
+            profile_data.get("level"),
+            profile_data.get("player_level"),
+        )
+
+        money_value = self._first_int(
+            money_data.get("money_onhand") if isinstance(money_data, dict) else None,
+            money_data.get("onhand") if isinstance(money_data, dict) else None,
+            currency_data.get("money_onhand") if isinstance(currency_data, dict) else None,
+            currency_data.get("onhand") if isinstance(currency_data, dict) else None,
+            profile_data.get("money_onhand"),
+            profile_data.get("onhand"),
+            payload.get("money_onhand"),
+        )
+
+        points_value = self._first_int(
+            points_data.get("points") if isinstance(points_data, dict) else points_data,
+            profile_data.get("points"),
+            payload.get("points"),
+        )
 
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "level": int(payload.get("level", 0)),
+            "level": level_value,
             "energy_current": int(bars.get("energy", {}).get("current", 0)),
             "energy_max": int(bars.get("energy", {}).get("maximum", 0)),
             "nerve_current": int(bars.get("nerve", {}).get("current", 0)),
             "nerve_max": int(bars.get("nerve", {}).get("maximum", 0)),
-            "money": int(
-                money_data.get("money_onhand")
-                or currency_data.get("money_onhand")
-                or payload.get("money_onhand", 0)
-            ),
-            "points": int(points_data.get("points") or payload.get("points", 0)),
+            "money": money_value,
+            "points": points_value,
             "events": self._extract_events(payload.get("events", {})),
         }
+
+    @staticmethod
+    def _first_int(*values: Any) -> int:
+        for value in values:
+            if isinstance(value, bool) or value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+        return 0
 
     async def fetch_market_price(self, item_id: int) -> dict[str, Any] | None:
         payload = await self._get_with_v2_fallback(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
