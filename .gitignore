@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 data/
+extract_items_ids.py
+dump_html

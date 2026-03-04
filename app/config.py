@@ -8,18 +8,7 @@ from dotenv import load_dotenv # pyright: ignore[reportMissingImports]
 
 load_dotenv()
 
-DEFAULT_TRACKED_ITEM_IDS = (
-    "372,403,1143,1084,1301,42,37,1123,1300,956,172,394,1306,1094,180,884,210,209,310,43,"
-    "1201,1205,205,1303,392,1125,68,1081,1078,1083,1082,196,1079,1458,67,66,1302,1344,731,"
-    "1459,1460,883,1457,1219,1080,527,365,206,366,370"
-)
 INSECURE_DEFAULT_AUTH_SECRET = "change-this-secret"
-
-
-def _parse_int_list(value: str) -> list[int]:
-    if not value.strip():
-        return []
-    return [int(part.strip()) for part in value.split(",") if part.strip().isdigit()]
 
 
 def _parse_users(value: str) -> dict[str, dict[str, str]]:
@@ -92,15 +81,6 @@ class Settings:
     torn_rate_limit_retry_count: int = int(os.getenv("TORN_RATE_LIMIT_RETRY_COUNT", "2"))
     torn_rate_limit_backoff_seconds: float = float(os.getenv("TORN_RATE_LIMIT_BACKOFF_SECONDS", "4.0"))
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
-    market_poll_interval_seconds: int = int(os.getenv("MARKET_POLL_INTERVAL_SECONDS", "120"))
-    market_max_items_per_cycle: int = int(os.getenv("MARKET_MAX_ITEMS_PER_CYCLE", "20"))
-    market_request_spacing_seconds: float = float(os.getenv("MARKET_REQUEST_SPACING_SECONDS", "1.2"))
-    tracked_item_ids: list[int] = None
-    auto_discovery_enabled: bool = os.getenv("AUTO_DISCOVERY_ENABLED", "0") == "1"
-    auto_discovery_pool_ids: list[int] = None
-    auto_discovery_top_n: int = int(os.getenv("AUTO_DISCOVERY_TOP_N", "12"))
-    auto_discovery_stats_window: int = int(os.getenv("AUTO_DISCOVERY_STATS_WINDOW", "36"))
-    price_drop_alert_percent: float = float(os.getenv("PRICE_DROP_ALERT_PERCENT", "12"))
     alert_cooldown_seconds: int = int(os.getenv("ALERT_COOLDOWN_SECONDS", "600"))
     discord_webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL", "")
     energy_full_alert: bool = os.getenv("ENERGY_FULL_ALERT", "1") == "1"
@@ -125,24 +105,24 @@ class Settings:
 
     alert_channel_rules: dict[str, list[str]] = None
 
-    strategy_window: int = int(os.getenv("STRATEGY_WINDOW", "12"))
-    strategy_volatility_weight: float = float(os.getenv("STRATEGY_VOLATILITY_WEIGHT", "1.5"))
-    strategy_min_drop_percent: float = float(os.getenv("STRATEGY_MIN_DROP_PERCENT", "4.0"))
-
-    backtest_horizon_steps: int = int(os.getenv("BACKTEST_HORIZON_STEPS", "4"))
-    backtest_profit_target_percent: float = float(os.getenv("BACKTEST_PROFIT_TARGET_PERCENT", "5.0"))
-    trading_budget_default: int = int(os.getenv("TRADING_BUDGET_DEFAULT", "5000000"))
-    trading_max_positions: int = int(os.getenv("TRADING_MAX_POSITIONS", "4"))
-
     faction_id: int = int(os.getenv("FACTION_ID", "0"))
     faction_poll_interval_seconds: int = int(os.getenv("FACTION_POLL_INTERVAL_SECONDS", "90"))
 
+    automation_enabled: bool = os.getenv("AUTOMATION_ENABLED", "0") == "1"
+    automation_dry_run: bool = os.getenv("AUTOMATION_DRY_RUN", "1") == "1"
+    automation_tick_seconds: int = int(os.getenv("AUTOMATION_TICK_SECONDS", "15"))
+    automation_max_actions_per_hour: int = int(os.getenv("AUTOMATION_MAX_ACTIONS_PER_HOUR", "30"))
+    automation_allowed_hours: str = os.getenv("AUTOMATION_ALLOWED_HOURS", "0-23")
+    automation_refresh_user_cooldown_seconds: int = int(os.getenv("AUTOMATION_REFRESH_USER_COOLDOWN_SECONDS", "60"))
+    automation_refresh_faction_cooldown_seconds: int = int(os.getenv("AUTOMATION_REFRESH_FACTION_COOLDOWN_SECONDS", "120"))
+    automation_attack_cooldown_seconds: int = int(os.getenv("AUTOMATION_ATTACK_COOLDOWN_SECONDS", "300"))
+    automation_buy_cooldown_seconds: int = int(os.getenv("AUTOMATION_BUY_COOLDOWN_SECONDS", "300"))
+    automation_attack_min_energy: int = int(os.getenv("AUTOMATION_ATTACK_MIN_ENERGY", "25"))
+    automation_buy_min_money: int = int(os.getenv("AUTOMATION_BUY_MIN_MONEY", "100000"))
+    automation_emergency_stop: bool = os.getenv("AUTOMATION_EMERGENCY_STOP", "0") == "1"
+
     def __post_init__(self) -> None:
         Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
-        self.tracked_item_ids = _parse_int_list(os.getenv("TRACKED_ITEM_IDS", DEFAULT_TRACKED_ITEM_IDS))
-        self.auto_discovery_pool_ids = _parse_int_list(
-            os.getenv("AUTO_DISCOVERY_POOL_IDS", DEFAULT_TRACKED_ITEM_IDS)
-        )
         self.auth_secret = _resolve_auth_secret(self.auth_secret, self.database_path, self.auth_secret_file)
         self.dashboard_users = _parse_users(os.getenv("DASHBOARD_USERS", "admin:admin123:admin"))
         self.alert_channel_rules = _parse_channel_rules(

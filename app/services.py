@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 from datetime import datetime, timezone
-from statistics import mean, pstdev
+from typing import Any
 
 from app.config import settings
 from app.notifier import Notifier
 from app.storage import Storage
-from app.strategy import StrategyEngine
-from app.torn_client import TornApiError, TornClient
+from app.torn_client import TornClient
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AutomationRule:
+    name: str
+    priority: int
+    cooldown_seconds: int
+    allowed_hours: set[int]
+    enabled: bool = True
 
 
 class TornNexusService:
@@ -19,19 +28,18 @@ class TornNexusService:
         self.storage = Storage(settings.database_path)
         self.client = TornClient(settings.torn_api_key, settings.torn_api_base)
         self.notifier = Notifier(settings.discord_webhook_url)
-        self.strategy = StrategyEngine(
-            window=settings.strategy_window,
-            volatility_weight=settings.strategy_volatility_weight,
-            min_drop_percent=settings.strategy_min_drop_percent,
-        )
 
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._energy_full_notified = False
         self._last_alert_sent_at: dict[str, float] = {}
-        self._market_refresh_lock = asyncio.Lock()
-        self._market_scan_cursor = 0
-        self._dynamic_tracked_item_ids: list[int] = list(settings.tracked_item_ids)
+        self._automation_task: asyncio.Task | None = None
+        self._automation_running = False
+        self._automation_emergency_stop = settings.automation_emergency_stop
+        self._automation_last_run_at: dict[str, float] = {}
+        self._automation_window_started_at: float = datetime.now(timezone.utc).timestamp()
+        self._automation_actions_in_window = 0
+        self._automation_rules: list[AutomationRule] = self._build_automation_rules()
 
     async def start(self) -> None:
         if self._running:
@@ -46,13 +54,15 @@ class TornNexusService:
 
         self._tasks = [
             asyncio.create_task(self._poll_user_loop(), name="poll-user-loop"),
-            asyncio.create_task(self._poll_market_loop(), name="poll-market-loop"),
         ]
         if settings.faction_id > 0:
             self._tasks.append(asyncio.create_task(self._poll_faction_loop(), name="poll-faction-loop"))
+        if settings.automation_enabled and not self._automation_emergency_stop:
+            await self.start_automation()
 
     async def stop(self) -> None:
         self._running = False
+        await self.stop_automation()
 
         for task in self._tasks:
             task.cancel()
@@ -66,29 +76,7 @@ class TornNexusService:
     async def _poll_user_loop(self) -> None:
         while self._running:
             try:
-                user_payload = await self.client.fetch_user_data()
-
-                snapshot = {
-                    "timestamp": user_payload["timestamp"],
-                    "level": user_payload["level"],
-                    "energy_current": user_payload["energy_current"],
-                    "energy_max": user_payload["energy_max"],
-                    "nerve_current": user_payload["nerve_current"],
-                    "nerve_max": user_payload["nerve_max"],
-                    "money": user_payload["money"],
-                    "points": user_payload["points"],
-                }
-                self.storage.add_user_snapshot(snapshot)
-
-                events = user_payload.get("events", [])
-                inserted = self.storage.add_events(events)
-                if inserted > 0:
-                    await self._notify(
-                        "event",
-                        f"{inserted} nouvel(s) événement(s) Torn détecté(s).",
-                    )
-
-                await self._check_energy_alert(snapshot)
+                await self._collect_user_snapshot()
 
             except Exception as exc:
                 logger.exception("User polling failed: %s", exc)
@@ -102,175 +90,10 @@ class TornNexusService:
 
             await asyncio.sleep(settings.poll_interval_seconds)
 
-    async def _poll_market_loop(self) -> None:
-        while self._running:
-            try:
-                await self.refresh_market_now()
-
-            except Exception as exc:
-                logger.exception("Market polling failed: %s", exc)
-                self.storage.add_alert(
-                    {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "kind": "error",
-                        "message": f"Market polling error: {exc}",
-                    }
-                )
-
-            await asyncio.sleep(settings.market_poll_interval_seconds)
-
-    async def refresh_market_now(self) -> dict[str, int]:
-        async with self._market_refresh_lock:
-            candidate_ids = self._get_scan_item_ids()
-            scan_ids = self._get_market_scan_batch(candidate_ids)
-            fetched = 0
-            inserted = 0
-            failed = 0
-            rate_limited = False
-            for index, item_id in enumerate(scan_ids):
-                try:
-                    price_payload = await self.client.fetch_market_price(item_id)
-                except TornApiError as exc:
-                    failed += 1
-                    if exc.code == 5:
-                        rate_limited = True
-                        logger.warning(
-                            "Market polling rate-limited after %s/%s items. Partial data kept.",
-                            fetched + failed,
-                            len(scan_ids),
-                        )
-                        self.storage.add_alert(
-                            {
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "kind": "error",
-                                "message": "Market polling rate-limited by Torn API (code 5). "
-                                "Increase interval or reduce tracked items.",
-                            }
-                        )
-                        break
-
-                    logger.warning("Market fetch failed for item %s: %s", item_id, exc)
-                    self.storage.add_alert(
-                        {
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "kind": "error",
-                            "message": f"Market fetch error for item {item_id}: {exc}",
-                        }
-                    )
-                    if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
-                        await asyncio.sleep(settings.market_request_spacing_seconds)
-                    continue
-
-                if not price_payload:
-                    if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
-                        await asyncio.sleep(settings.market_request_spacing_seconds)
-                    continue
-                fetched += 1
-                self.storage.add_market_price(price_payload)
-                inserted += 1
-                await self._check_price_alert(price_payload)
-                if settings.market_request_spacing_seconds > 0 and index < len(scan_ids) - 1:
-                    await asyncio.sleep(settings.market_request_spacing_seconds)
-
-            if settings.auto_discovery_enabled:
-                self._refresh_dynamic_tracked_item_ids(candidate_ids)
-
-            return {
-                "fetched": fetched,
-                "inserted": inserted,
-                "failed": failed,
-                "tracked": len(self.get_effective_tracked_item_ids()),
-                "scanned": len(scan_ids),
-                "scanned_total": len(candidate_ids),
-                "rate_limited": int(rate_limited),
-            }
-
-    def _get_market_scan_batch(self, item_ids: list[int]) -> list[int]:
-        if not item_ids:
-            return []
-
-        cycle_size = max(1, settings.market_max_items_per_cycle)
-        if len(item_ids) <= cycle_size:
-            return list(item_ids)
-
-        start = self._market_scan_cursor % len(item_ids)
-        end = start + cycle_size
-        if end <= len(item_ids):
-            batch = item_ids[start:end]
-        else:
-            overflow = end - len(item_ids)
-            batch = item_ids[start:] + item_ids[:overflow]
-
-        self._market_scan_cursor = (start + cycle_size) % len(item_ids)
-        return batch
-
-    def get_effective_tracked_item_ids(self) -> list[int]:
-        if settings.auto_discovery_enabled and self._dynamic_tracked_item_ids:
-            return list(self._dynamic_tracked_item_ids)
-        return list(settings.tracked_item_ids)
-
-    def _get_scan_item_ids(self) -> list[int]:
-        if settings.auto_discovery_enabled and settings.auto_discovery_pool_ids:
-            return list(settings.auto_discovery_pool_ids)
-        return list(settings.tracked_item_ids)
-
-    def _refresh_dynamic_tracked_item_ids(self, candidate_ids: list[int]) -> None:
-        ranked = self._rank_candidate_items(candidate_ids)
-        if ranked:
-            top_n = max(1, settings.auto_discovery_top_n)
-            self._dynamic_tracked_item_ids = [row["item_id"] for row in ranked[:top_n]]
-            return
-
-        self._dynamic_tracked_item_ids = list(settings.tracked_item_ids)
-
-    def _rank_candidate_items(self, candidate_ids: list[int]) -> list[dict[str, float | int]]:
-        rows: list[dict[str, float | int]] = []
-        window = max(8, settings.auto_discovery_stats_window)
-
-        for item_id in candidate_ids:
-            series = self.storage.get_market_prices_for_item(item_id=item_id, limit=window)
-            prices = [int(row["lowest_price"]) for row in series if int(row.get("lowest_price", 0)) > 0]
-            samples = len(prices)
-            if samples < max(6, min(window, 12)):
-                continue
-
-            avg_price = mean(prices)
-            if avg_price <= 0:
-                continue
-
-            volatility_pct = (pstdev(prices) / avg_price) * 100 if samples >= 2 else 0.0
-            spread_pct = ((max(prices) - min(prices)) / avg_price) * 100 if samples >= 2 else 0.0
-            liquidity_score = min(100.0, (samples / window) * 100)
-            volatility_score = min(100.0, volatility_pct * 4)
-            spread_score = min(100.0, spread_pct * 2.5)
-
-            score = liquidity_score * 0.45 + volatility_score * 0.30 + spread_score * 0.25
-            rows.append(
-                {
-                    "item_id": item_id,
-                    "score": round(score, 3),
-                    "liquidity": round(liquidity_score, 3),
-                    "volatility": round(volatility_score, 3),
-                    "spread": round(spread_score, 3),
-                }
-            )
-
-        rows.sort(key=lambda row: (float(row["score"]), float(row["liquidity"])), reverse=True)
-        return rows
-
     async def _poll_faction_loop(self) -> None:
         while self._running:
             try:
-                faction_payload = await self.client.fetch_faction_data(settings.faction_id)
-                self.storage.add_faction_snapshot(faction_payload)
-
-                chain_current = faction_payload.get("chain_current", 0)
-                chain_timeout = faction_payload.get("chain_timeout", 0)
-                if chain_current > 0 and chain_timeout > 0 and chain_timeout < 120:
-                    await self._notify(
-                        "war_room",
-                        f"🚨 Chain critique: {chain_current} hits, timeout dans {chain_timeout}s.",
-                    )
+                await self._collect_faction_snapshot()
 
             except Exception as exc:
                 logger.exception("Faction polling failed: %s", exc)
@@ -284,20 +107,276 @@ class TornNexusService:
 
             await asyncio.sleep(settings.faction_poll_interval_seconds)
 
-    async def _check_price_alert(self, price_payload: dict) -> None:
-        history = self.storage.get_market_prices_for_item(price_payload["item_id"], limit=220)
-        prices = [int(row["lowest_price"]) for row in history]
-        if len(prices) < settings.strategy_window:
+    async def _collect_user_snapshot(self) -> dict[str, Any]:
+        user_payload = await self.client.fetch_user_data()
+
+        snapshot = {
+            "timestamp": user_payload["timestamp"],
+            "level": user_payload["level"],
+            "energy_current": user_payload["energy_current"],
+            "energy_max": user_payload["energy_max"],
+            "nerve_current": user_payload["nerve_current"],
+            "nerve_max": user_payload["nerve_max"],
+            "money": user_payload["money"],
+            "points": user_payload["points"],
+        }
+        self.storage.add_user_snapshot(snapshot)
+
+        events = user_payload.get("events", [])
+        inserted = self.storage.add_events(events)
+        if inserted > 0:
+            await self._notify(
+                "event",
+                f"{inserted} nouvel(s) événement(s) Torn détecté(s).",
+            )
+
+        await self._check_energy_alert(snapshot)
+        return snapshot
+
+    async def _collect_faction_snapshot(self) -> dict[str, Any] | None:
+        if settings.faction_id <= 0:
+            return None
+
+        faction_payload = await self.client.fetch_faction_data(settings.faction_id)
+        self.storage.add_faction_snapshot(faction_payload)
+
+        chain_current = faction_payload.get("chain_current", 0)
+        chain_timeout = faction_payload.get("chain_timeout", 0)
+        if chain_current > 0 and chain_timeout > 0 and chain_timeout < 120:
+            await self._notify(
+                "war_room",
+                f"🚨 Chain critique: {chain_current} hits, timeout dans {chain_timeout}s.",
+            )
+
+        return faction_payload
+
+    async def start_automation(self) -> bool:
+        if self._automation_emergency_stop:
+            return False
+        if self._automation_running:
+            return True
+
+        self._automation_running = True
+        self._automation_task = asyncio.create_task(self._automation_loop(), name="automation-loop")
+        return True
+
+    async def stop_automation(self) -> None:
+        self._automation_running = False
+        if self._automation_task is not None:
+            self._automation_task.cancel()
+            await asyncio.gather(self._automation_task, return_exceptions=True)
+            self._automation_task = None
+
+    async def set_automation_emergency_stop(self, enabled: bool) -> None:
+        self._automation_emergency_stop = bool(enabled)
+        if self._automation_emergency_stop:
+            await self.stop_automation()
+
+    def get_automation_status(self) -> dict[str, Any]:
+        return {
+            "enabled": settings.automation_enabled,
+            "running": self._automation_running,
+            "dry_run": settings.automation_dry_run,
+            "emergency_stop": self._automation_emergency_stop,
+            "max_actions_per_hour": settings.automation_max_actions_per_hour,
+            "actions_executed_current_hour": self._automation_actions_in_window,
+            "tick_seconds": settings.automation_tick_seconds,
+            "rules": [
+                {
+                    "name": rule.name,
+                    "enabled": rule.enabled,
+                    "priority": rule.priority,
+                    "cooldown_seconds": rule.cooldown_seconds,
+                    "allowed_hours": sorted(rule.allowed_hours),
+                    "last_run_at": self._automation_last_run_at.get(rule.name),
+                }
+                for rule in self._automation_rules
+            ],
+        }
+
+    def get_automation_logs(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.storage.get_bot_action_logs(limit=limit)
+
+    async def _automation_loop(self) -> None:
+        while self._running and self._automation_running:
+            try:
+                await self._automation_tick()
+            except Exception as exc:
+                logger.exception("Automation tick failed: %s", exc)
+                self.storage.add_bot_action_log(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "action_name": "automation_tick",
+                        "status": "error",
+                        "dry_run": int(settings.automation_dry_run),
+                        "priority": 0,
+                        "details": str(exc),
+                    }
+                )
+            await asyncio.sleep(max(3, settings.automation_tick_seconds))
+
+    async def _automation_tick(self) -> None:
+        if self._automation_emergency_stop:
             return
 
-        signal = self.strategy.signal_for_series(prices)
-        if signal.get("has_signal"):
-            message = (
-                f"🔥 BUY SIGNAL {price_payload['item_name']} ({price_payload['item_id']}): "
-                f"{signal['current_price']:,}$ vs MA {signal['moving_average']:,.0f}$ "
-                f"(-{signal['drop_percent']:.1f}% / seuil {signal['dynamic_threshold']:.1f}%)"
-            )
-            await self._notify("price_drop", message)
+        now = datetime.now(timezone.utc)
+        now_ts = now.timestamp()
+        self._refresh_hour_window(now_ts)
+        if self._automation_actions_in_window >= settings.automation_max_actions_per_hour:
+            return
+
+        overview = self.storage.get_latest_overview()
+        snapshot = overview.get("snapshot") if isinstance(overview, dict) else None
+
+        for rule in sorted(self._automation_rules, key=lambda row: row.priority, reverse=True):
+            if not rule.enabled:
+                continue
+            if now.hour not in rule.allowed_hours:
+                continue
+            if not self._rule_cooldown_ready(rule, now_ts):
+                continue
+
+            can_run, reason = self._rule_conditions_met(rule.name, snapshot)
+            if not can_run:
+                continue
+
+            if self._automation_actions_in_window >= settings.automation_max_actions_per_hour:
+                break
+
+            await self._execute_automation_rule(rule)
+            self._automation_last_run_at[rule.name] = now_ts
+            self._automation_actions_in_window += 1
+
+    def _refresh_hour_window(self, now_ts: float) -> None:
+        if now_ts - self._automation_window_started_at >= 3600:
+            self._automation_window_started_at = now_ts
+            self._automation_actions_in_window = 0
+
+    def _rule_cooldown_ready(self, rule: AutomationRule, now_ts: float) -> bool:
+        last_ts = self._automation_last_run_at.get(rule.name)
+        if last_ts is None:
+            return True
+        return (now_ts - last_ts) >= max(0, rule.cooldown_seconds)
+
+    def _rule_conditions_met(self, rule_name: str, snapshot: dict[str, Any] | None) -> tuple[bool, str]:
+        if rule_name == "attack":
+            if not snapshot:
+                return False, "snapshot_missing"
+            energy_current = int(snapshot.get("energy_current", 0))
+            if energy_current < settings.automation_attack_min_energy:
+                return False, "not_enough_energy"
+            return True, "ready"
+
+        if rule_name == "buy":
+            if not snapshot:
+                return False, "snapshot_missing"
+            money = int(snapshot.get("money", 0))
+            if money < settings.automation_buy_min_money:
+                return False, "not_enough_money"
+            return True, "ready"
+
+        if rule_name == "refresh_faction" and settings.faction_id <= 0:
+            return False, "faction_not_configured"
+
+        return True, "ready"
+
+    async def _execute_automation_rule(self, rule: AutomationRule) -> None:
+        details = ""
+        status = "ok"
+
+        if settings.automation_dry_run:
+            status = "dry_run"
+            details = f"Action simulée: {rule.name}"
+        else:
+            if rule.name == "refresh_user":
+                await self._collect_user_snapshot()
+                details = "Snapshot user rafraîchi"
+            elif rule.name == "refresh_faction":
+                await self._collect_faction_snapshot()
+                details = "Snapshot faction rafraîchi"
+            elif rule.name == "attack":
+                status = "skipped"
+                details = "Action attack non implémentée (placeholder V1)."
+            elif rule.name == "buy":
+                status = "skipped"
+                details = "Action buy non implémentée (placeholder V1)."
+            else:
+                status = "skipped"
+                details = "Action inconnue"
+
+        self.storage.add_bot_action_log(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "action_name": rule.name,
+                "status": status,
+                "dry_run": int(settings.automation_dry_run),
+                "priority": rule.priority,
+                "details": details,
+            }
+        )
+
+    def _build_automation_rules(self) -> list[AutomationRule]:
+        allowed_hours = self._parse_allowed_hours(settings.automation_allowed_hours)
+        return [
+            AutomationRule(
+                name="refresh_user",
+                priority=100,
+                cooldown_seconds=max(5, settings.automation_refresh_user_cooldown_seconds),
+                allowed_hours=allowed_hours,
+                enabled=True,
+            ),
+            AutomationRule(
+                name="refresh_faction",
+                priority=80,
+                cooldown_seconds=max(10, settings.automation_refresh_faction_cooldown_seconds),
+                allowed_hours=allowed_hours,
+                enabled=settings.faction_id > 0,
+            ),
+            AutomationRule(
+                name="attack",
+                priority=60,
+                cooldown_seconds=max(30, settings.automation_attack_cooldown_seconds),
+                allowed_hours=allowed_hours,
+                enabled=True,
+            ),
+            AutomationRule(
+                name="buy",
+                priority=50,
+                cooldown_seconds=max(30, settings.automation_buy_cooldown_seconds),
+                allowed_hours=allowed_hours,
+                enabled=True,
+            ),
+        ]
+
+    def _parse_allowed_hours(self, raw: str) -> set[int]:
+        text = raw.strip()
+        if not text:
+            return set(range(24))
+
+        selected: set[int] = set()
+        for part in text.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if "-" in token:
+                start_raw, end_raw = token.split("-", 1)
+                if not start_raw.strip().isdigit() or not end_raw.strip().isdigit():
+                    continue
+                start = int(start_raw.strip())
+                end = int(end_raw.strip())
+                if 0 <= start <= 23 and 0 <= end <= 23:
+                    if start <= end:
+                        selected.update(range(start, end + 1))
+                    else:
+                        selected.update(range(start, 24))
+                        selected.update(range(0, end + 1))
+                continue
+            if token.isdigit():
+                hour = int(token)
+                if 0 <= hour <= 23:
+                    selected.add(hour)
+
+        return selected or set(range(24))
 
     async def _check_energy_alert(self, snapshot: dict) -> None:
         if not settings.energy_full_alert:

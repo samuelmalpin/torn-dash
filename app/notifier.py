@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import aiohttp
+import aiohttp # pyright: ignore[reportMissingImports]
 import asyncio
 import smtplib
 from email.message import EmailMessage

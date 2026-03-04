@@ -15,14 +15,6 @@ class UserSnapshot:
 
 
 @dataclass
-class MarketPrice:
-    timestamp: datetime
-    item_id: int
-    item_name: str
-    lowest_price: int
-
-
-@dataclass
 class Alert:
     timestamp: datetime
     kind: str

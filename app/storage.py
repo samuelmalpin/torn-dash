@@ -32,14 +32,6 @@ class Storage:
                     points INTEGER NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS market_prices (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    item_id INTEGER NOT NULL,
-                    item_name TEXT NOT NULL,
-                    lowest_price INTEGER NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS alerts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
@@ -65,6 +57,16 @@ class Storage:
                     chain_timeout INTEGER NOT NULL,
                     critical_members_json TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS bot_action_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    action_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    dry_run INTEGER NOT NULL,
+                    priority INTEGER NOT NULL,
+                    details TEXT NOT NULL
+                );
                 """
             )
 
@@ -86,21 +88,6 @@ class Storage:
                     payload["nerve_max"],
                     payload["money"],
                     payload["points"],
-                ),
-            )
-
-    def add_market_price(self, payload: dict[str, Any]) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO market_prices (timestamp, item_id, item_name, lowest_price)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    payload["timestamp"],
-                    payload["item_id"],
-                    payload["item_name"],
-                    payload["lowest_price"],
                 ),
             )
 
@@ -158,48 +145,6 @@ class Storage:
             "events": [dict(row) for row in latest_events],
         }
 
-    def get_market_history(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT timestamp, item_id, item_name, lowest_price
-                FROM market_prices
-                ORDER BY id DESC LIMIT 100
-                """
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_average_price(self, item_id: int, sample_size: int = 8) -> float | None:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT lowest_price FROM market_prices
-                WHERE item_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (item_id, sample_size),
-            ).fetchall()
-
-        prices = [row["lowest_price"] for row in rows]
-        if not prices:
-            return None
-        return sum(prices) / len(prices)
-
-    def get_market_prices_for_item(self, item_id: int, limit: int = 200) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT timestamp, item_id, item_name, lowest_price
-                FROM market_prices
-                WHERE item_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (item_id, limit),
-            ).fetchall()
-        return [dict(row) for row in reversed(rows)]
-
     def get_user_timeseries(self, limit: int = 48) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -220,44 +165,6 @@ class Storage:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
-
-    def get_market_insights(self, item_ids: list[int], sample_size: int = 12) -> list[dict[str, Any]]:
-        insights: list[dict[str, Any]] = []
-
-        with self._connect() as conn:
-            for item_id in item_ids:
-                recent = conn.execute(
-                    """
-                    SELECT item_name, lowest_price
-                    FROM market_prices
-                    WHERE item_id = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (item_id, sample_size),
-                ).fetchall()
-
-                if not recent:
-                    continue
-
-                latest_price = int(recent[0]["lowest_price"])
-                item_name = str(recent[0]["item_name"])
-                prices = [int(row["lowest_price"]) for row in recent]
-                avg_price = sum(prices) / len(prices)
-                delta_percent = ((latest_price - avg_price) / avg_price) * 100 if avg_price > 0 else 0
-
-                insights.append(
-                    {
-                        "item_id": item_id,
-                        "item_name": item_name,
-                        "latest_price": latest_price,
-                        "average_price": round(avg_price, 2),
-                        "delta_percent": round(delta_percent, 2),
-                    }
-                )
-
-        insights.sort(key=lambda item: item["delta_percent"])
-        return insights
 
     def add_faction_snapshot(self, payload: dict[str, Any]) -> None:
         import json
@@ -281,6 +188,36 @@ class Storage:
                     json.dumps(payload.get("critical_members", [])),
                 ),
             )
+
+    def add_bot_action_log(self, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO bot_action_logs (timestamp, action_name, status, dry_run, priority, details)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["timestamp"],
+                    payload["action_name"],
+                    payload["status"],
+                    int(payload["dry_run"]),
+                    int(payload["priority"]),
+                    payload.get("details", ""),
+                ),
+            )
+
+    def get_bot_action_logs(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT timestamp, action_name, status, dry_run, priority, details
+                FROM bot_action_logs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_latest_faction_snapshot(self) -> dict[str, Any] | None:
         import json

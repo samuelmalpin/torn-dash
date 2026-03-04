@@ -3,20 +3,11 @@ const api = {
   logout: "/api/auth/logout",
   health: "/api/health",
   overview: "/api/overview",
-  market: "/api/market",
-  marketPollNow: "/api/market/poll-now",
   timeseries: "/api/timeseries",
-  insights: "/api/insights",
-  opportunities: "/api/opportunities",
-  tradingPlan: "/api/trading/plan",
-  marketSeries: "/api/market/series",
-  backtest: "/api/strategy/backtest",
   warRoom: "/api/faction/war-room",
 };
 
 const $ = (id) => document.getElementById(id);
-let currentUser = null;
-let trackedItems = [];
 
 function formatMoney(value) {
   return Number(value || 0).toLocaleString("fr-FR") + " $";
@@ -24,14 +15,15 @@ function formatMoney(value) {
 
 function formatDate(value) {
   if (!value) return "--";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString("fr-FR");
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("fr-FR");
 }
 
 function setList(elementId, entries, formatter) {
   const host = $(elementId);
   host.innerHTML = "";
+
   if (!entries || entries.length === 0) {
     const li = document.createElement("li");
     li.className = "empty";
@@ -52,12 +44,14 @@ function lineGeometry(values, width, height, padding = 6) {
   const max = Math.max(...values);
   const min = Math.min(...values);
   const span = Math.max(1, max - min);
+
   const points = values.map((value, index) => {
     const x = padding + (index * (width - padding * 2)) / (values.length - 1);
     const y = height - padding - ((value - min) * (height - padding * 2)) / span;
     return { x, y };
   });
-  return { points, min, max };
+
+  return { points };
 }
 
 function renderSparkline(svgId, values, usePurple = false) {
@@ -78,152 +72,6 @@ function renderSparkline(svgId, values, usePurple = false) {
   line.setAttribute("points", polyPoints);
   line.setAttribute("class", usePurple ? "sparkline-line purple" : "sparkline-line");
   svg.appendChild(line);
-}
-
-function renderInsights(items) {
-  const host = $("insights-grid");
-  host.innerHTML = "";
-
-  if (!items || items.length === 0) {
-    const div = document.createElement("div");
-    div.className = "insight-card empty";
-    div.textContent = "Aucun insight marché pour le moment.";
-    host.appendChild(div);
-    return;
-  }
-
-  items.slice(0, 6).forEach((item) => {
-    const div = document.createElement("div");
-    div.className = "insight-card";
-    const deltaClass = item.delta_percent <= 0 ? "delta-good" : "delta-bad";
-    const deltaLabel = `${item.delta_percent > 0 ? "+" : ""}${item.delta_percent.toFixed(2)}%`;
-
-    div.innerHTML = `
-      <div class="insight-item">${item.item_name} (#${item.item_id})</div>
-      <div class="insight-price">${formatMoney(item.latest_price)} vs moy ${formatMoney(item.average_price)}</div>
-      <div class="${deltaClass}">Écart: ${deltaLabel}</div>
-    `;
-    host.appendChild(div);
-  });
-}
-
-function movingAverage(values, window = 6) {
-  return values.map((_, index) => {
-    const start = Math.max(0, index - window + 1);
-    const chunk = values.slice(start, index + 1);
-    return chunk.reduce((acc, value) => acc + value, 0) / chunk.length;
-  });
-}
-
-function renderCandlesAndMA(series) {
-  const svg = $("chart-candles");
-  svg.innerHTML = "";
-  const width = Number(svg.viewBox.baseVal.width || 640);
-  const height = Number(svg.viewBox.baseVal.height || 180);
-
-  if (!series || series.length < 2) return;
-
-  const prices = series.map((row) => Number(row.lowest_price || 0));
-  const grouped = [];
-  const bucketSize = Math.max(2, Math.floor(prices.length / 24));
-  for (let i = 0; i < prices.length; i += bucketSize) {
-    const chunk = prices.slice(i, i + bucketSize);
-    if (!chunk.length) continue;
-    grouped.push({
-      open: chunk[0],
-      close: chunk[chunk.length - 1],
-      high: Math.max(...chunk),
-      low: Math.min(...chunk),
-    });
-  }
-
-  if (!grouped.length) return;
-
-  const highs = grouped.map((g) => g.high);
-  const lows = grouped.map((g) => g.low);
-  const max = Math.max(...highs);
-  const min = Math.min(...lows);
-  const span = Math.max(1, max - min);
-  const toY = (value) => height - 10 - ((value - min) * (height - 20)) / span;
-
-  const candleWidth = Math.max(4, (width - 12) / grouped.length - 2);
-  grouped.forEach((candle, idx) => {
-    const x = 6 + idx * (candleWidth + 2);
-    const wick = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    wick.setAttribute("x1", `${x + candleWidth / 2}`);
-    wick.setAttribute("x2", `${x + candleWidth / 2}`);
-    wick.setAttribute("y1", `${toY(candle.high)}`);
-    wick.setAttribute("y2", `${toY(candle.low)}`);
-    wick.setAttribute("class", "candle-wick");
-    svg.appendChild(wick);
-
-    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    const bodyTop = Math.min(toY(candle.open), toY(candle.close));
-    const bodyHeight = Math.max(2, Math.abs(toY(candle.open) - toY(candle.close)));
-    rect.setAttribute("x", `${x}`);
-    rect.setAttribute("y", `${bodyTop}`);
-    rect.setAttribute("width", `${candleWidth}`);
-    rect.setAttribute("height", `${bodyHeight}`);
-    rect.setAttribute("class", "candle-body");
-    svg.appendChild(rect);
-  });
-
-  const ma = movingAverage(grouped.map((g) => g.close), 5);
-  const maGeometry = lineGeometry(ma, width, height, 8);
-  if (maGeometry) {
-    const maLine = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-    maLine.setAttribute(
-      "points",
-      maGeometry.points.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ")
-    );
-    maLine.setAttribute("class", "ma-line");
-    svg.appendChild(maLine);
-  }
-}
-
-function renderVolatility(series) {
-  const svg = $("chart-volatility");
-  svg.innerHTML = "";
-  if (!series || series.length < 3) return;
-
-  const prices = series.map((row) => Number(row.lowest_price || 0));
-  const volatility = prices.slice(1).map((value, index) => {
-    const prev = prices[index] || 1;
-    return Math.abs(((value - prev) / prev) * 100);
-  });
-  renderSparkline("chart-volatility", volatility, true);
-}
-
-function renderHeatmap(series) {
-  const host = $("heatmap");
-  host.innerHTML = "";
-  if (!series || !series.length) return;
-
-  const prices = series.map((row) => Number(row.lowest_price || 0));
-  const max = Math.max(...prices);
-  const min = Math.min(...prices);
-  const span = Math.max(1, max - min);
-
-  prices.slice(-96).forEach((price) => {
-    const level = (price - min) / span;
-    const hue = 210 - Math.round(level * 140);
-    const alpha = 0.25 + level * 0.65;
-    const cell = document.createElement("div");
-    cell.className = "heat-cell";
-    cell.style.background = `hsla(${hue}, 92%, 62%, ${alpha.toFixed(2)})`;
-    host.appendChild(cell);
-  });
-}
-
-function fillMarketSelector(items) {
-  const select = $("market-item-select");
-  select.innerHTML = "";
-  items.forEach((itemId) => {
-    const option = document.createElement("option");
-    option.value = String(itemId);
-    option.textContent = `Item #${itemId}`;
-    select.appendChild(option);
-  });
 }
 
 function renderWarRoom(snapshot) {
@@ -322,31 +170,19 @@ async function apiFetch(url, options = {}) {
 
 async function loadAuthContext() {
   const me = await apiFetch(api.me);
-  currentUser = me;
   $("user-pill").textContent = `${me.username} • ${me.role}`;
-  if (me.role !== "admin") {
-    $("run-backtest-btn").style.display = "none";
-  }
 }
 
 async function loadHealth() {
   const health = await apiFetch(api.health);
-  trackedItems = health.tracked_items || [];
-  $("health-pill").textContent = health.torn_configured
-    ? `Online • ${trackedItems.length} items trackés`
-    : "API key manquante";
-  if (trackedItems.length) {
-    fillMarketSelector(trackedItems);
-  }
-  if ($("trading-budget-input") && !$("trading-budget-input").value) {
-    $("trading-budget-input").value = String(health.trading_budget_default || 5000000);
-  }
+  $("health-pill").textContent = health.torn_configured ? "Online" : "API key manquante";
   return health;
 }
 
 async function loadOverview() {
   const data = await apiFetch(api.overview);
   const snapshot = data.snapshot;
+
   if (snapshot) {
     $("level").textContent = snapshot.level;
     $("money").textContent = formatMoney(snapshot.money);
@@ -360,26 +196,6 @@ async function loadOverview() {
   setList("events-list", data.events, (event) => `[${formatDate(event.timestamp)}] ${event.text}`);
 }
 
-async function loadMarketTable() {
-  const data = await apiFetch(api.market);
-  const body = $("market-body");
-  body.innerHTML = "";
-
-  const rows = (data.history || []).slice(0, 20);
-  if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = '<td colspan="3" class="empty">Aucune donnée marché</td>';
-    body.appendChild(tr);
-    return;
-  }
-
-  rows.forEach((row) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${formatDate(row.timestamp)}</td><td>${row.item_name} (#${row.item_id})</td><td>${formatMoney(row.lowest_price)}</td>`;
-    body.appendChild(tr);
-  });
-}
-
 async function loadTimeseries(historyPoints) {
   const data = await apiFetch(`${api.timeseries}?points=${historyPoints}`);
   const points = data.points || [];
@@ -388,131 +204,15 @@ async function loadTimeseries(historyPoints) {
   renderSparkline("chart-points", points.map((p) => Number(p.points || 0)));
 }
 
-async function loadInsights() {
-  const data = await apiFetch(api.insights);
-  renderInsights(data.market || []);
-}
-
-async function loadOpportunities() {
-  const data = await apiFetch(api.opportunities);
-  const summary = data.summary || { buy: 0, watch: 0, skip: 0, wait_data: 0, no_data: 0 };
-  $("opportunities-summary").textContent =
-    `BUY: ${summary.buy} • WATCH: ${summary.watch} • SKIP: ${summary.skip} • ` +
-    `WAIT: ${summary.wait_data} • NONE: ${summary.no_data}`;
-
-  const items = data.items || [];
-  setList(
-    "opportunities-list",
-    items,
-    (item) => {
-      if (item.action === "NO_DATA") {
-        return `[NO_DATA] ${item.item_name} (#${item.item_id}) • aucune donnée marché collectée`;
-      }
-      if (item.action === "WAIT_DATA") {
-        return `[WAIT_DATA] ${item.item_name} (#${item.item_id}) • ${item.samples} échantillons (min ${item.min_samples_required || 12})`;
-      }
-      return (
-        `[${item.action}] ${item.item_name} (#${item.item_id}) • conf ${item.confidence}% • ` +
-        `Δ ${item.drop_percent}%/${item.threshold_percent}% • ` +
-        `potentiel ${formatMoney(item.expected_return)} (${item.expected_return_percent}%)`
-      );
-    }
-  );
-}
-
-async function pollMarketNow() {
-  const btn = $("poll-market-now-btn");
-  const previous = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Polling...";
-
-  try {
-    const result = await apiFetch(api.marketPollNow, { method: "POST" });
-    await Promise.all([loadMarketTable(), loadInsights(), loadOpportunities(), loadAdvancedMarketChart()]);
-    btn.textContent = `Terminé (${result.inserted}/${result.tracked})`;
-    setTimeout(() => {
-      btn.textContent = previous;
-      btn.disabled = false;
-    }, 2000);
-  } catch (error) {
-    btn.textContent = "Erreur";
-    setTimeout(() => {
-      btn.textContent = previous;
-      btn.disabled = false;
-    }, 2000);
-  }
-}
-
-async function loadTradingPlan() {
-  const input = $("trading-budget-input");
-  const budget = Math.max(10000, Number(input.value || 0));
-  input.value = String(budget);
-
-  const data = await apiFetch(`${api.tradingPlan}?budget=${budget}`);
-  $("trading-plan-summary").textContent =
-    `Mode: simulation • Budget ${formatMoney(data.budget)} • ` +
-    `Engagé ${formatMoney(data.spent)} • Reste ${formatMoney(data.remaining)}`;
-
-  setList(
-    "trading-plan-list",
-    data.items || [],
-    (item) =>
-      `[${item.action}] ${item.item_name} (#${item.item_id}) • qty ${item.quantity} x ${formatMoney(item.unit_price)} • ` +
-      `engagé ${formatMoney(item.allocated)} • potentiel ${formatMoney(item.expected_return_total)}`
-  );
-}
-
 async function loadWarRoom() {
   const data = await apiFetch(api.warRoom);
   renderWarRoom(data.snapshot);
 }
 
-async function loadAdvancedMarketChart() {
-  const select = $("market-item-select");
-  if (!select.value) return;
-  const itemId = Number(select.value);
-  const data = await apiFetch(`${api.marketSeries}?item_id=${itemId}&limit=240`);
-  const series = data.series || [];
-  renderCandlesAndMA(series);
-  renderVolatility(series);
-  renderHeatmap(series);
-}
-
-async function runBacktest() {
-  const select = $("market-item-select");
-  const itemId = Number(select.value);
-  if (!itemId || !currentUser || currentUser.role !== "admin") return;
-
-  const box = $("backtest-box");
-  box.classList.remove("empty");
-  box.textContent = "Exécution backtest...";
-  try {
-    const data = await apiFetch(`${api.backtest}?item_id=${itemId}`);
-    const report = data.report;
-    const signal = data.latest_signal;
-    box.innerHTML = `
-      <div>Item #${itemId} • Signaux: ${report.signals} • Win rate: ${report.win_rate}%</div>
-      <div>Avg return: ${report.avg_return_percent}% • Wins/Losses: ${report.wins}/${report.losses}</div>
-      <div>Signal actuel: ${signal.has_signal ? "BUY" : "NO-SIGNAL"} (drop ${signal.drop_percent || 0}% / seuil ${signal.dynamic_threshold || 0}%)</div>
-    `;
-  } catch (error) {
-    box.classList.add("empty");
-    box.textContent = `Backtest indisponible (${error.message})`;
-  }
-}
-
 async function refresh() {
   try {
     const health = await loadHealth();
-    await Promise.all([
-      loadOverview(),
-      loadMarketTable(),
-      loadTimeseries(health.history_points || 48),
-      loadInsights(),
-      loadOpportunities(),
-      loadWarRoom(),
-      loadAdvancedMarketChart(),
-    ]);
+    await Promise.all([loadOverview(), loadTimeseries(health.history_points || 48), loadWarRoom()]);
   } catch (error) {
     $("health-pill").textContent = "Erreur API";
     console.error(error);
@@ -526,10 +226,6 @@ async function logout() {
 
 function wireEvents() {
   $("logout-btn").addEventListener("click", logout);
-  $("market-item-select").addEventListener("change", loadAdvancedMarketChart);
-  $("run-backtest-btn").addEventListener("click", runBacktest);
-  $("poll-market-now-btn").addEventListener("click", pollMarketNow);
-  $("generate-plan-btn").addEventListener("click", loadTradingPlan);
 }
 
 async function bootstrap() {
@@ -538,7 +234,6 @@ async function bootstrap() {
   wireEvents();
   await loadAuthContext();
   await refresh();
-  await loadTradingPlan();
   setInterval(refresh, 30000);
 }
 

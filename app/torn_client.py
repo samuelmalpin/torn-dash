@@ -6,7 +6,7 @@ import logging
 from time import monotonic
 from typing import Any
 
-import aiohttp
+import aiohttp # pyright: ignore[reportMissingImports]
 
 from app.config import settings
 
@@ -309,54 +309,6 @@ class TornClient:
             return
         self._diagnostics_once.add(key)
         logger.warning(message, *args)
-
-    async def fetch_market_price(self, item_id: int) -> dict[str, Any] | None:
-        payload = await self._get_with_v2_fallback(f"market/{item_id}", {"selections": "bazaar,itemmarket"})
-
-        candidates: list[int] = []
-
-        if isinstance(payload, dict):
-            for key in ("bazaar", "itemmarket"):
-                section = payload.get(key, {})
-                if isinstance(section, dict):
-                    for _, listing in section.items():
-                        if not isinstance(listing, dict):
-                            continue
-                        price = listing.get("cost") or listing.get("price")
-                        if isinstance(price, (int, float)) and price > 0:
-                            candidates.append(int(price))
-                elif isinstance(section, list):
-                    for listing in section:
-                        if not isinstance(listing, dict):
-                            continue
-                        price = listing.get("cost") or listing.get("price")
-                        if isinstance(price, (int, float)) and price > 0:
-                            candidates.append(int(price))
-        elif isinstance(payload, list):
-            for listing in payload:
-                if not isinstance(listing, dict):
-                    continue
-                price = listing.get("cost") or listing.get("price")
-                if isinstance(price, (int, float)) and price > 0:
-                    candidates.append(int(price))
-
-        if not candidates:
-            return None
-
-        item_name = f"Item {item_id}"
-        if isinstance(payload, dict):
-            item_name = payload.get("name") or payload.get("item", {}).get("name") or item_name
-        elif isinstance(payload, list) and payload:
-            first = payload[0]
-            if isinstance(first, dict):
-                item_name = str(first.get("name") or first.get("item_name") or item_name)
-
-        return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "item_id": item_id,
-            "item_name": item_name,
-            "lowest_price": min(candidates),
-        }
 
     async def fetch_faction_data(self, faction_id: int) -> dict[str, Any]:
         path = "faction" if faction_id <= 0 else f"faction/{faction_id}"
